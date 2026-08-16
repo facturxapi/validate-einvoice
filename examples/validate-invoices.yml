@@ -1,0 +1,42 @@
+# Example consumer workflow — copy into .github/workflows/ of any repo
+# that already contains this Action (submodule / subtree) or change
+# `uses:` to a published tag of this repository.
+#
+# Requires: ubuntu-latest, XML invoices matching the glob below.
+
+name: Validate EN16931 invoices
+
+on:
+  pull_request:
+    paths:
+      - '**/*.xml'
+  push:
+    paths:
+      - '**/*.xml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run official EN16931 1.3.16 XSLT
+        id: en16931
+        uses: ./
+        with:
+          files: testdata/official/*.xml
+          syntax: auto
+          fail-on: failed-assert
+          version: '1.3.16'
+
+      - name: Show verdict
+        if: always()
+        run: |
+          echo "verdict=${{ steps.en16931.outputs.verdict }}"
+          echo "failed-count=${{ steps.en16931.outputs.failed-count }}"
+          echo "report-sha256=${{ steps.en16931.outputs.report-sha256 }}"

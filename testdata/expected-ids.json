@@ -1,0 +1,12 @@
+{
+  "CII-BR-CO-10-RoundingIssue.xml": ["BR-01"],
+  "CII_business_example_01.xml": ["BR-CO-10", "BR-CO-13"],
+  "CII_business_example_02.xml": ["BR-CL-01"],
+  "CII_business_example_Z.xml": ["BR-CO-09"],
+  "CII_example1.xml": ["BR-CO-15", "BR-CO-16"],
+  "CII_example3.xml": ["BR-S-09", "BR-CO-14"],
+  "CII_example5.xml": ["BR-02"],
+  "XRechnung-O.xml": ["CII-DT-097"],
+  "huf_example_cii.xml": ["BR-CO-17", "BR-S-08", "BR-S-09"],
+  "ubl-tc434-creditnote1.xml": ["BR-CO-16"]
+}

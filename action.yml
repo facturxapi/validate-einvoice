@@ -1,0 +1,75 @@
+name: 'Validate EN16931 e-invoice'
+description: >-
+  Run the official ConnectingEurope EN16931 1.3.16 XSLT (CII and UBL)
+  on XML invoices and fail the job on svrl:failed-assert.
+author: 'euphyra-dev'
+
+branding:
+  icon: 'file-text'
+  color: 'blue'
+
+inputs:
+  files:
+    description: >-
+      Glob(s) of XML invoices, relative to the workspace.
+      Separate multiple globs with a newline or a comma.
+    required: true
+  syntax:
+    description: >-
+      auto (default) detects CII vs UBL from the document element namespace.
+      cii or ubl forces one syntax and fails if the document does not match.
+    required: false
+    default: 'auto'
+  fail-on:
+    description: >-
+      failed-assert (default): any svrl:failed-assert fails the job.
+      never: write the report only.
+      Comma-separated rule ids: fail only if one of those ids fires.
+    required: false
+    default: 'failed-assert'
+  version:
+    description: 'EN16931 XSLT version. Only the vendored 1.3.16 artefacts are shipped.'
+    required: false
+    default: '1.3.16'
+
+outputs:
+  verdict:
+    description: 'pass or fail'
+    value: ${{ steps.run.outputs.verdict }}
+  failed-count:
+    description: 'Number of files with at least one svrl:failed-assert'
+    value: ${{ steps.run.outputs.failed-count }}
+  report:
+    description: 'Canonical JSON report (stable field order, no timestamps)'
+    value: ${{ steps.run.outputs.report }}
+  report-sha256:
+    description: 'SHA256 of the canonical JSON report'
+    value: ${{ steps.run.outputs.report-sha256 }}
+  report-path:
+    description: 'Workspace-relative path of the written JSON report'
+    value: ${{ steps.run.outputs.report-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install SaxonC-HE 13.0
+      shell: bash
+      run: >
+        python3 -m pip install --disable-pip-version-check
+        -r "${{ github.action_path }}/requirements.txt"
+
+    - name: Validate EN16931 invoices
+      id: run
+      shell: bash
+      env:
+        INPUT_FILES: ${{ inputs.files }}
+        INPUT_SYNTAX: ${{ inputs.syntax }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_VERSION: ${{ inputs.version }}
+        EN16931_ACTION_ROOT: ${{ github.action_path }}
+      run: python3 "${{ github.action_path }}/src/validate.py" --github
