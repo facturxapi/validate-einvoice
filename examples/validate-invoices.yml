@@ -1,8 +1,6 @@
-# Example consumer workflow — copy into .github/workflows/ of any repo
-# that already contains this Action (submodule / subtree) or change
-# `uses:` to a published tag of this repository.
-#
-# Requires: ubuntu-latest, XML invoices matching the glob below.
+# Example consumer workflow.
+# After publication, pin the Marketplace tag. Until then, use `uses: ./`
+# when this repository is the workflow checkout.
 
 name: Validate EN16931 invoices
 
@@ -27,7 +25,7 @@ jobs:
 
       - name: Run official EN16931 1.3.16 XSLT
         id: en16931
-        uses: ./
+        uses: facturxapi/validate-einvoice@v1
         with:
           files: testdata/official/*.xml
           syntax: auto
