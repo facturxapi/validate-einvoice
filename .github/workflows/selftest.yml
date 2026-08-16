@@ -2,8 +2,6 @@ name: Self-test EN16931 action
 
 on:
   push:
-    paths:
-      - '**'
   pull_request:
   workflow_dispatch:
 
@@ -11,8 +9,30 @@ permissions:
   contents: read
 
 jobs:
-  official-green:
-    runs-on: ubuntu-latest
+  selftest:
+    name: selftest ${{ matrix.os }} py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run portable selftest
+        run: python scripts/selftest.py
+
+  action-official:
+    name: action official ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - name: Official examples must pass
@@ -22,8 +42,13 @@ jobs:
           syntax: auto
           fail-on: failed-assert
 
-  mutants-red:
-    runs-on: ubuntu-latest
+  action-mutants:
+    name: action mutants ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - name: Mutants must fail the job
@@ -39,32 +64,4 @@ jobs:
           MUTANT_OUTCOME: ${{ steps.mutants.outcome }}
           MUTANT_VERDICT: ${{ steps.mutants.outputs.verdict }}
           MUTANT_REPORT: ${{ steps.mutants.outputs.report }}
-        run: |
-          python3 - <<'PY'
-          import json, os, sys
-          from pathlib import Path
-          if os.environ.get("MUTANT_OUTCOME") != "failure":
-              print("mutant job did not fail", file=sys.stderr)
-              sys.exit(1)
-          if os.environ.get("MUTANT_VERDICT") != "fail":
-              print("mutant verdict is not fail", file=sys.stderr)
-              sys.exit(1)
-          expected = json.loads(Path("testdata/expected-ids.json").read_text(encoding="utf-8"))
-          report = json.loads(os.environ["MUTANT_REPORT"])
-          got = {Path(row["path"]).name: row["failed_assert_ids"] for row in report["files"]}
-          errors = []
-          for name, ids in expected.items():
-              if got.get(name) != ids:
-                  errors.append(f"{name}: expected {ids}, got {got.get(name)}")
-          if errors:
-              print("\n".join(errors), file=sys.stderr)
-              sys.exit(1)
-          print("mutants: exact ids, job failed")
-          PY
-
-  local-selftest:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run scripts/selftest.sh
-        run: bash scripts/selftest.sh
+        run: python scripts/check_mutant_report.py
