@@ -1,0 +1,22 @@
+{
+  "owner": "ConnectingEurope",
+  "repo": "eInvoicing-EN16931",
+  "releases_api": "https://api.github.com/repos/ConnectingEurope/eInvoicing-EN16931/releases",
+  "pinned_tag": "validation-1.3.16",
+  "pinned_version": "1.3.16",
+  "user_agent": "en16931-validate-einvoice-upstream-check/1.0",
+  "assets": {
+    "cii": {
+      "name_prefix": "en16931-cii-",
+      "zip_sha256": "1cd53cb8a84d38aedc82c0caede217da983a7934dd663f793a092fd66443c561",
+      "xslt_inner": "xslt/EN16931-CII-validation.xslt",
+      "xslt_sha256": "0b234dea2bbfee739b7761e607a992c17fab88773014ef56355b6158cfb1cc53"
+    },
+    "ubl": {
+      "name_prefix": "en16931-ubl-",
+      "zip_sha256": "bafada015efbc5248bf5e05ad2191e1d9833ef96e9dd5f4bce420a747342da85",
+      "xslt_inner": "xslt/EN16931-UBL-validation.xslt",
+      "xslt_sha256": "39f9d282867f1a49e7708d9e29a53da89643e1ee56f10cec1ebcf1277595fcbd"
+    }
+  }
+}
