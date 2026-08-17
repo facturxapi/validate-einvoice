@@ -12,7 +12,8 @@ inputs:
   files:
     description: >-
       Glob(s) of XML invoices, relative to the workspace.
-      Separate multiple globs with a newline or a comma.
+      Separate multiple globs with a newline. Spaces and commas
+      are part of the pattern, not separators.
     required: true
   syntax:
     description: >-
