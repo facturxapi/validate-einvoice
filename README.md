@@ -131,3 +131,8 @@ unit tests, and run the identity gate. Any difference is a failure.
 EUPL 1.2 for this Action. The vendored XSLT and the official examples
 are ConnectingEurope EN16931 `validation-1.3.16`, also EUPL 1.2,
 unmodified. Mutants are modified copies (see `NOTICE`).
+
+## See also
+
+- [en16931-oracles](https://github.com/facturxapi/en16931-oracles) — test invoices with signed expected verdicts, aligned with the Commission's ITB validator (16/16). Useful as CI fixtures for this Action.
+- For PDF/A-3 (Factur-X/ZUGFeRD) container checks, repair, and the French CTC profile: [facturxapi.com/docs](https://facturxapi.com/docs).
