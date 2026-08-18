@@ -72,4 +72,6 @@ runs:
         INPUT_FAIL_ON: ${{ inputs.fail-on }}
         INPUT_VERSION: ${{ inputs.version }}
         EN16931_ACTION_ROOT: ${{ github.action_path }}
+        PYTHONUTF8: "1"
+        PYTHONIOENCODING: utf-8
       run: python3 "${{ github.action_path }}/src/validate.py" --github

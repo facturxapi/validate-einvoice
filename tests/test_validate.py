@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -120,6 +121,56 @@ class WriteReportTests(unittest.TestCase):
             dest = Path(tmp) / "report.json"
             dest.write_text(validate.canonical_json({"k": 1}), encoding="utf-8")
             self.assertEqual(dest.read_text(encoding="utf-8"), '{"k":1}\n')
+
+
+class GithubOutputWindowsTests(unittest.TestCase):
+    def test_github_output_is_lf_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "github_output"
+            dest.write_bytes(b"")
+            previous = os.environ.get("GITHUB_OUTPUT")
+            os.environ["GITHUB_OUTPUT"] = str(dest)
+            try:
+                validate.write_github_output(
+                    {"verdict": "fail", "failed-count": "1"},
+                    '{"verdict":"fail"}\n',
+                )
+            finally:
+                if previous is None:
+                    os.environ.pop("GITHUB_OUTPUT", None)
+                else:
+                    os.environ["GITHUB_OUTPUT"] = previous
+            raw = dest.read_bytes()
+            self.assertIn(b"verdict=fail\n", raw)
+            self.assertNotIn(b"verdict=fail\r\n", raw)
+            self.assertNotIn(b"\r", raw)
+
+    def test_emit_line_survives_cp1252_sigma(self) -> None:
+        class FakeCp1252:
+            encoding = "cp1252"
+            buffer = None
+
+            def __init__(self) -> None:
+                self.chunks: list[str] = []
+
+            def write(self, text: str) -> int:
+                text.encode("cp1252")
+                self.chunks.append(text)
+                return len(text)
+
+            def flush(self) -> None:
+                return None
+
+        sink = FakeCp1252()
+        previous = sys.stdout
+        sys.stdout = sink  # type: ignore[assignment]
+        try:
+            with self.assertRaises(UnicodeEncodeError):
+                print("sum \u03a3 of invoice lines")
+            validate.emit_line("sum \u03a3 of invoice lines")
+        finally:
+            sys.stdout = previous
+        self.assertTrue(any("sum" in chunk for chunk in sink.chunks))
 
 
 if __name__ == "__main__":
