@@ -13,11 +13,13 @@ def main() -> int:
     if os.environ.get("MUTANT_OUTCOME") != "failure":
         print("mutant job did not fail", file=sys.stderr)
         return 1
-    if os.environ.get("MUTANT_VERDICT") != "fail":
+    # Windows may inject a trailing CR into GITHUB_OUTPUT values.
+    verdict = (os.environ.get("MUTANT_VERDICT") or "").strip()
+    if verdict != "fail":
         print("mutant verdict is not fail", file=sys.stderr)
         return 1
     expected = json.loads(Path("testdata/expected-ids.json").read_text(encoding="utf-8"))
-    raw = os.environ.get("MUTANT_REPORT") or ""
+    raw = (os.environ.get("MUTANT_REPORT") or "").strip()
     try:
         report = json.loads(raw)
     except json.JSONDecodeError as exc:

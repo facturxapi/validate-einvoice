@@ -335,6 +335,36 @@ def markdown_summary(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def configure_stdio() -> None:
+    """Force UTF-8 on stdout/stderr so SVRL text (e.g. Σ) cannot crash Windows."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
+
+
+def emit_line(text: str, *, file: Any = None) -> None:
+    """Print one line without raising UnicodeEncodeError on a narrow codec."""
+    target = sys.stderr if file is sys.stderr else (file or sys.stdout)
+    try:
+        print(text, file=target)
+        return
+    except UnicodeEncodeError:
+        pass
+    encoding = getattr(target, "encoding", None) or "utf-8"
+    payload = (text + "\n").encode(encoding, errors="replace")
+    buffer = getattr(target, "buffer", None)
+    if buffer is not None:
+        buffer.write(payload)
+        buffer.flush()
+        return
+    target.write(payload.decode(encoding, errors="replace"))
+
+
 def write_github_output(values: dict[str, str], report_text: str) -> None:
     dest = os.environ.get("GITHUB_OUTPUT")
     if not dest:
@@ -342,11 +372,13 @@ def write_github_output(values: dict[str, str], report_text: str) -> None:
     delimiter = "EN16931_REPORT_EOF"
     if delimiter in report_text:
         raise EngineError("report contains output delimiter")
-    with open(dest, "a", encoding="utf-8") as handle:
+    # newline="\n": on Windows, text mode would otherwise write CR LF.
+    # GitHub then exposes verdict=fail\r, and `!= "fail"` is true.
+    with open(dest, "a", encoding="utf-8", newline="\n") as handle:
         for key, value in values.items():
             handle.write(f"{key}={value}\n")
         handle.write(f"report<<{delimiter}\n")
-        handle.write(report_text)
+        handle.write(report_text.replace("\r\n", "\n").replace("\r", "\n"))
         if not report_text.endswith("\n"):
             handle.write("\n")
         handle.write(f"{delimiter}\n")
@@ -356,7 +388,7 @@ def write_step_summary(text: str) -> None:
     dest = os.environ.get("GITHUB_STEP_SUMMARY")
     if not dest:
         return
-    with open(dest, "a", encoding="utf-8") as handle:
+    with open(dest, "a", encoding="utf-8", newline="\n") as handle:
         handle.write(text)
         if not text.endswith("\n"):
             handle.write("\n")
@@ -446,25 +478,25 @@ def validate_files(
 
 def print_console(result: dict[str, Any]) -> None:
     payload = result["payload"]
-    print(f"engine : {payload['engine']} ({payload['engine_pkg']})")
-    print(f"version: {payload['version']}")
-    print(f"syntax : {payload['syntax']}")
-    print(f"fail-on: {payload['fail_on']}")
-    print()
-    print(f"{'file':<42} {'syn':<4} {'n':>3}  verdict  ids")
-    print("-" * 88)
+    emit_line(f"engine : {payload['engine']} ({payload['engine_pkg']})")
+    emit_line(f"version: {payload['version']}")
+    emit_line(f"syntax : {payload['syntax']}")
+    emit_line(f"fail-on: {payload['fail_on']}")
+    emit_line("")
+    emit_line(f"{'file':<42} {'syn':<4} {'n':>3}  verdict  ids")
+    emit_line("-" * 88)
     for row in payload["files"]:
         ids = ",".join(row["failed_assert_ids"])
-        print(
+        emit_line(
             f"{row['path']:<42} {row['syntax']:<4} {row['failed_assert_count']:>3}  "
             f"{row['verdict']:<6}  {ids}"
         )
-    print("-" * 88)
-    print(f"verdict      : {payload['verdict']}")
-    print(f"failed-count : {payload['failed_count']}")
-    print(f"report-sha256: {result['report_sha256']}")
+    emit_line("-" * 88)
+    emit_line(f"verdict      : {payload['verdict']}")
+    emit_line(f"failed-count : {payload['failed_count']}")
+    emit_line(f"report-sha256: {result['report_sha256']}")
     for line in result["annotations"]:
-        print(line)
+        emit_line(line)
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -554,7 +586,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         result["report_path"] = ""
 
-    print_console(result)
+    # Outputs first: a later console encode error must not leave MUTANT_VERDICT empty.
     if emit:
         write_github_output(
             {
@@ -566,8 +598,10 @@ def main(argv: list[str] | None = None) -> int:
             result["report_text"],
         )
         write_step_summary(markdown_summary({**result["payload"], "report_sha256": result["report_sha256"]}))
+    print_console(result)
     return int(result["exit_code"])
 
 
 if __name__ == "__main__":
+    configure_stdio()
     sys.exit(main())
