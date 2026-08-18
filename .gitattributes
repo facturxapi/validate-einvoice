@@ -1,0 +1,6 @@
+# Vendored ConnectingEurope artefacts are hashed on disk (src/validate.py).
+# A Windows checkout with CRLF conversion fails the SHA256 pin
+# (run https://github.com/facturxapi/validate-einvoice/actions/runs/32080965759).
+*.xslt text eol=lf
+vendor/**/*.sch text eol=lf
+vendor/**/*.xml text eol=lf
