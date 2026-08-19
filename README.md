@@ -55,7 +55,7 @@ Copy-paste workflow: [`examples/validate-invoices.yml`](examples/validate-invoic
 
 | Name | Required | Default | Meaning |
 |---|---|---|---|
-| `files` | yes | — | Glob(s) of XML invoices, relative to the workspace. Separate several globs with a newline or a comma. Zero matches fail the job (exit 2). |
+| `files` | yes | — | Glob(s) of XML invoices, relative to the workspace. Separate several globs with a **newline**. Spaces (including leading/trailing) and commas are part of the pattern. Empty lines are ignored. Zero matches fail the job (exit 2). |
 | `syntax` | no | `auto` | `auto` reads the document-element namespace. `cii` / `ubl` force one syntax and fail if the document does not match. |
 | `fail-on` | no | `failed-assert` | `failed-assert`: any `svrl:failed-assert` fails the job. `never`: report only. Comma-separated ids: fail only if one of those ids fires. |
 | `version` | no | `1.3.16` | Only the vendored 1.3.16 artefacts are shipped. Any other value is a configuration error. |
@@ -76,6 +76,14 @@ Each file in the JSON has: `path`, `syntax`, `verdict`,
 
 The job also writes GitHub annotations (`::error file=…,title=<id>::`)
 and a markdown table on the job summary. Invoice bytes are never logged.
+Annotation properties and messages are encoded (`%` CR/LF `:` `,`) after
+truncation so a workflow command cannot be split or injected.
+
+## Runner
+
+Linux only (`ubuntu-latest`). A non-Linux runner exits `2` immediately.
+There is no environment-variable override. The example workflow pins
+`runs-on: ubuntu-latest`.
 
 ## Reproducibility
 

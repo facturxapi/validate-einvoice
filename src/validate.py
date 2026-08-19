@@ -2,7 +2,7 @@
 """Validate EN16931 CII/UBL invoices with the official 1.3.16 XSLT.
 
 Engine: SaxonC-HE 13.0 (saxonche==13.0.0).
-Never logs invoice bytes.
+Never logs invoice bytes. Never hands the original invoice path to Saxon.
 """
 
 from __future__ import annotations
@@ -39,7 +39,48 @@ FAILED_BLOCK_RE = re.compile(
 ID_ATTR_RE = re.compile(r'\bid="([^"]+)"')
 LOCATION_ATTR_RE = re.compile(r'\blocation="([^"]*)"')
 TEXT_RE = re.compile(r"<svrl:text\b[^>]*>(.*?)</svrl:text>", re.DOTALL)
-FIRED_RE = re.compile(r"<svrl:fired-rule\b")
+
+XSLT_NS = "http://www.w3.org/1999/XSL/Transform"
+SVRL_NS = "http://purl.oclc.org/dsdl/svrl"
+# Call `name(` or function-ref `name#N`, optional NCName: / Q{uri} prefix.
+# Longest names first. Not applied to svrl:text prose.
+_XSLT_FORBIDDEN_FNS = (
+    "unparsed-text-available",
+    "unparsed-text-lines",
+    "unparsed-text",
+    "available-environment-variables",
+    "environment-variable",
+    "load-xquery-module",
+    "function-lookup",
+    "uri-collection",
+    "collection",
+    "doc-available",
+    "json-doc",
+    "document",
+    "transform",
+    "trace",
+    "error",
+    "doc",
+)
+XSLT_URI_FN_RE = re.compile(
+    r"(?<![A-Za-z0-9._-])(?:[A-Za-z_][\w.-]*:|Q\{[^}]*\})?(?:"
+    + "|".join(_XSLT_FORBIDDEN_FNS)
+    + r")(?![A-Za-z0-9._-])(?:\s*\(|\s*#\s*\d+)",
+    re.IGNORECASE,
+)
+XSLT_IO_ELEMENTS = {
+    "include",
+    "import",
+    "import-schema",
+    "source-document",
+    "result-document",
+    "evaluate",
+    "use-package",
+    "message",
+    "assert",
+}
+LINUX_ONLY_MESSAGE = "this Action supports Linux runners only (ubuntu-latest)"
+ANNOTATION_TEXT_LIMIT = 200
 
 EXIT_OK = 0
 EXIT_FAIL = 1
@@ -73,13 +114,22 @@ def action_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def require_linux() -> None:
+    """Fail-closed. No environment variable can skip this check."""
+    if sys.platform != "linux":
+        raise ConfigError(LINUX_ONLY_MESSAGE)
+
+
 def split_patterns(raw_values: list[str]) -> list[str]:
+    """Newline-delimited only. Spaces and commas stay in the pattern, including edges."""
     pieces: list[str] = []
     for raw in raw_values:
-        for part in re.split(r"[\n,]+", raw):
-            part = part.strip()
-            if part:
-                pieces.append(part)
+        for part in raw.split("\n"):
+            if part.endswith("\r"):
+                part = part[:-1]
+            if part == "":
+                continue
+            pieces.append(part)
     return pieces
 
 
@@ -116,20 +166,16 @@ def expand_files(patterns: list[str], cwd: Path | None = None) -> list[Path]:
             found.append(candidate)
 
     if missing_patterns and not found:
-        raise ConfigError(
-            "no XML files matched: " + ", ".join(missing_patterns)
-        )
+        raise ConfigError("no XML files matched: " + ", ".join(missing_patterns))
     if missing_patterns:
-        raise ConfigError(
-            "pattern matched nothing: " + ", ".join(missing_patterns)
-        )
+        raise ConfigError("pattern matched nothing: " + ", ".join(missing_patterns))
     if not found:
         raise ConfigError("no XML files matched the files input")
     return found
 
 
 def display_path(path: Path, cwd: Path | None = None) -> str:
-    """Relative posix path when possible; basename otherwise. Never force a home path."""
+    """Relative posix path when possible; basename otherwise."""
     here = cwd if cwd is not None else Path.cwd()
     try:
         return path.resolve().relative_to(here.resolve()).as_posix()
@@ -137,16 +183,31 @@ def display_path(path: Path, cwd: Path | None = None) -> str:
         return path.name
 
 
-def detect_syntax(path: Path) -> str:
-    root_tag = None
+def hardened_parse(path: Path) -> ET.ElementTree:
+    """Single untrusted-XML parse. DTD, entities, and external refs are refused."""
+    from defusedxml.ElementTree import parse as defused_parse
+
     try:
-        for _event, elem in ET.iterparse(path, events=("start",)):
-            root_tag = elem.tag
-            break
-    except ET.ParseError as exc:
-        raise ConfigError(f"XML is not well-formed ({path.name}): {exc}") from exc
-    if root_tag is None:
-        raise ConfigError(f"XML has no document element ({path.name})")
+        return defused_parse(
+            str(path),
+            forbid_dtd=True,
+            forbid_entities=True,
+            forbid_external=True,
+        )
+    except Exception as exc:
+        raise ConfigError(f"XML rejected by hardened parser ({path.name}): {exc}") from exc
+
+
+def serialize_safe_xml(tree: ET.ElementTree) -> str:
+    """Re-serialize without DOCTYPE or external entities — Saxon's only input."""
+    payload = ET.tostring(tree.getroot(), encoding="utf-8", xml_declaration=True, method="xml")
+    if isinstance(payload, bytes):
+        return payload.decode("utf-8")
+    return payload
+
+
+def detect_syntax_from_root(root: ET.Element) -> str:
+    root_tag = root.tag
     if root_tag.startswith("{"):
         ns, local = root_tag[1:].split("}", 1)
     else:
@@ -155,9 +216,12 @@ def detect_syntax(path: Path) -> str:
         return "CII"
     if ns in {UBL_INVOICE_NS, UBL_CREDIT_NS} or local in {"Invoice", "CreditNote"}:
         return "UBL"
-    raise ConfigError(
-        f"cannot detect EN16931 syntax from document element ({path.name})"
-    )
+    raise ConfigError("cannot detect EN16931 syntax from document element")
+
+
+def detect_syntax(path: Path) -> str:
+    tree = hardened_parse(path)
+    return detect_syntax_from_root(tree.getroot())
 
 
 def resolve_syntax(path: Path, requested: str) -> str:
@@ -172,9 +236,7 @@ def resolve_syntax(path: Path, requested: str) -> str:
     else:
         raise ConfigError("syntax must be auto, cii, or ubl")
     if detected != forced:
-        raise ConfigError(
-            f"{path.name}: syntax={mode} but document is {detected}"
-        )
+        raise ConfigError(f"{path.name}: syntax={mode} but document is {detected}")
     return forced
 
 
@@ -224,10 +286,49 @@ def require_engine_pkg() -> str:
             f"Install {ENGINE_PKG_PIN} (see requirements.txt)."
         ) from exc
     if not found.startswith(ENGINE_PKG_PREFIX):
-        raise ConfigError(
-            f"{ENGINE_PKG_PIN} is required, found saxonche=={found}"
-        )
+        raise ConfigError(f"{ENGINE_PKG_PIN} is required, found saxonche=={found}")
     return found
+
+
+def vendor_root(root: Path) -> Path:
+    return (root / "vendor").resolve()
+
+
+def assert_xslt_under_vendor(path: Path, root: Path) -> None:
+    resolved = path.resolve()
+    vroot = vendor_root(root)
+    if not resolved.is_relative_to(vroot):
+        raise ConfigError(f"XSLT escaped vendor root: {path.name}")
+
+
+def _tag_parts(tag: str) -> tuple[str, str]:
+    if tag.startswith("{"):
+        ns, local = tag[1:].split("}", 1)
+        return ns, local
+    return "", tag
+
+
+def xpath_has_forbidden_fn(expr: str) -> bool:
+    """True if expr calls or references a forbidden function (incl. lookup)."""
+    return XSLT_URI_FN_RE.search(expr) is not None
+
+
+def assert_xslt_has_no_external_deps(path: Path) -> None:
+    """Refuse include/import by XSLT namespace and URI-access functions in XPath."""
+    tree = hardened_parse(path)
+    for elem in tree.getroot().iter():
+        ns, local = _tag_parts(elem.tag)
+        if ns == XSLT_NS and local in XSLT_IO_ELEMENTS:
+            raise EngineError(f"XSLT has forbidden include/URI feature: {path.name}")
+        if ns == SVRL_NS and local == "text":
+            continue
+        for _attr_name, attr_val in elem.attrib.items():
+            if xpath_has_forbidden_fn(attr_val):
+                raise EngineError(f"XSLT has forbidden include/URI feature: {path.name}")
+        if ns != SVRL_NS and elem.text and xpath_has_forbidden_fn(elem.text):
+            raise EngineError(f"XSLT has forbidden include/URI feature: {path.name}")
+        if elem.tail and xpath_has_forbidden_fn(elem.tail):
+            raise EngineError(f"XSLT has forbidden include/URI feature: {path.name}")
 
 
 def load_xslt(root: Path, version: str) -> dict[str, dict[str, str | Path]]:
@@ -243,12 +344,14 @@ def load_xslt(root: Path, version: str) -> dict[str, dict[str, str | Path]]:
     for syntax, (path, expected, logical) in mapping.items():
         if not path.is_file():
             raise ConfigError(f"vendored XSLT missing: {logical}")
+        assert_xslt_under_vendor(path, root)
         digest = sha256_file(path)
         if digest != expected:
             raise ConfigError(
                 f"vendored XSLT SHA256 mismatch for {logical}: "
                 f"expected {expected}, got {digest}"
             )
+        assert_xslt_has_no_external_deps(path)
         resolved[syntax] = {"path": path, "sha256": digest, "logical": logical}
     return resolved
 
@@ -267,7 +370,8 @@ class SaxonEngine:
         self._xslt = self._proc.new_xslt30_processor()
         self._compiled: dict[str, Any] = {}
 
-    def transform(self, xml_path: Path, xslt_path: Path) -> str:
+    def transform(self, xml_text: str, xslt_path: Path) -> str:
+        """Transform re-serialized XML text. Never accepts an invoice filesystem path."""
         key = str(xslt_path)
         executable = self._compiled.get(key)
         if executable is None:
@@ -275,9 +379,12 @@ class SaxonEngine:
             if executable is None:
                 raise EngineError(f"XSLT compile failed: {xslt_path.name}")
             self._compiled[key] = executable
-        svrl = executable.transform_to_string(source_file=str(xml_path))
+        node = self._proc.parse_xml(xml_text=xml_text)
+        if node is None:
+            raise EngineError("Saxon could not parse the hardened XML")
+        svrl = executable.transform_to_string(xdm_node=node)
         if svrl is None:
-            raise EngineError(f"XSLT produced no SVRL: {xml_path.name}")
+            raise EngineError("XSLT produced no SVRL")
         return svrl
 
     def close(self) -> None:
@@ -300,14 +407,35 @@ def file_triggers_fail(row: dict[str, Any], fail_on: dict[str, Any]) -> bool:
     return any(item in watched for item in ids)
 
 
+def _truncate_before_encode(text: str, limit: int = ANNOTATION_TEXT_LIMIT) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def encode_workflow_prop(value: str) -> str:
+    text = _truncate_before_encode(value)
+    return (
+        text.replace("%", "%25")
+        .replace("\r", "%0D")
+        .replace("\n", "%0A")
+        .replace(":", "%3A")
+        .replace(",", "%2C")
+    )
+
+
+def encode_workflow_msg(value: str) -> str:
+    text = _truncate_before_encode(value)
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
 def annotation_line(rel_path: str, item: dict[str, str]) -> str:
     rule_id = item["id"]
     text = item["text"] or "failed-assert"
-    text = text.replace("\r", " ").replace("\n", " ")
-    if len(text) > 220:
-        text = text[:217] + "..."
-    # title is the rule id; body repeats id then the SVRL text.
-    return f"::error file={rel_path},title={rule_id}::{rule_id}: {text}"
+    file_prop = encode_workflow_prop(rel_path)
+    title_prop = encode_workflow_prop(rule_id)
+    message = encode_workflow_msg(f"{rule_id}: {text}")
+    return f"::error file={file_prop},title={title_prop}::{message}"
 
 
 def markdown_summary(report: dict[str, Any]) -> str:
@@ -411,9 +539,24 @@ def validate_files(
     annotations: list[str] = []
     try:
         for path in files:
-            resolved_syntax = resolve_syntax(path, syntax)
+            tree = hardened_parse(path)
+            detected = detect_syntax_from_root(tree.getroot())
+            mode = syntax.lower()
+            if mode == "auto":
+                resolved_syntax = detected
+            elif mode == "cii":
+                resolved_syntax = "CII"
+                if detected != resolved_syntax:
+                    raise ConfigError(f"{path.name}: syntax={mode} but document is {detected}")
+            elif mode == "ubl":
+                resolved_syntax = "UBL"
+                if detected != resolved_syntax:
+                    raise ConfigError(f"{path.name}: syntax={mode} but document is {detected}")
+            else:
+                raise ConfigError("syntax must be auto, cii, or ubl")
+            safe_xml = serialize_safe_xml(tree)
             xslt_info = xslt[resolved_syntax]
-            svrl = engine.transform(path, Path(xslt_info["path"]))
+            svrl = engine.transform(safe_xml, Path(xslt_info["path"]))
             failed = parse_failed_asserts(svrl)
             ids = [item["id"] for item in failed]
             rel = display_path(path, cwd=cwd)
@@ -465,8 +608,6 @@ def validate_files(
     report_text = canonical_json(payload)
     report_sha = sha256_text(report_text)
     payload["report_sha256"] = report_sha
-    # report_sha256 is a convenience on the in-memory object only.
-    # The hashed document excludes it so two runs compare equal.
     return {
         "payload": payload,
         "report_text": report_text,
@@ -507,7 +648,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--files",
         nargs="*",
         default=None,
-        help="Glob(s) of XML invoices. Overrides INPUT_FILES when set.",
+        help="Newline-delimited glob(s) of XML invoices. Overrides INPUT_FILES when set.",
     )
     parser.add_argument(
         "--syntax",
@@ -541,8 +682,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def resolve_inputs(args: argparse.Namespace) -> dict[str, Any]:
     files = args.files
     if not files:
-        env_files = os.environ.get("INPUT_FILES", "").strip()
-        files = [env_files] if env_files else []
+        env_files = os.environ.get("INPUT_FILES", "")
+        files = [env_files] if env_files.strip() else []
     if not files or files == [""]:
         raise ConfigError("files input is required")
     syntax = args.syntax or os.environ.get("INPUT_SYNTAX") or "auto"
@@ -559,6 +700,7 @@ def resolve_inputs(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        require_linux()
         inputs = resolve_inputs(args)
         root = action_root()
         xml_files = expand_files(inputs["files"])
@@ -572,7 +714,12 @@ def main(argv: list[str] | None = None) -> int:
             emit_annotations=emit,
         )
     except (ConfigError, EngineError) as exc:
-        print(f"::error::{exc}" if os.environ.get("GITHUB_ACTIONS") == "true" else f"error: {exc}", file=sys.stderr)
+        github = os.environ.get("GITHUB_ACTIONS") == "true"
+        message = str(exc)
+        if github:
+            print(f"::error::{encode_workflow_msg(message)}", file=sys.stderr)
+        else:
+            print(f"error: {message}", file=sys.stderr)
         return EXIT_CONFIG
 
     report_path = args.report
