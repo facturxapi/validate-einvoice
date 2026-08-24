@@ -1,5 +1,7 @@
 # Validate EN16931 e-invoice
 
+[![Self-test EN16931 action](https://github.com/facturxapi/validate-einvoice/actions/workflows/selftest.yml/badge.svg)](https://github.com/facturxapi/validate-einvoice/actions/workflows/selftest.yml) [![EN16931 upstream drift](https://github.com/facturxapi/validate-einvoice/actions/workflows/upstream-drift.yml/badge.svg)](https://github.com/facturxapi/validate-einvoice/actions/workflows/upstream-drift.yml) [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Validate%20EN16931-blue?logo=github)](https://github.com/marketplace/actions/validate-en16931-e-invoice)
+
 GitHub Action and local CLI that runs the official ConnectingEurope
 EN16931 1.3.16 XSLT (CII and UBL) on XML invoices and reports every
 `svrl:failed-assert`.
@@ -134,6 +136,7 @@ unmodified. Mutants are modified copies (see `NOTICE`).
 
 ## See also
 
+- [awesome-einvoicing](https://github.com/facturxapi/awesome-einvoicing) — sourced map of EN16931 / Factur-X / ZUGFeRD / XRechnung specs, validators, and corpora.
 - [en16931-oracles](https://github.com/facturxapi/en16931-oracles) — test invoices with signed expected verdicts, aligned with the Commission's ITB validator (16/16). Useful as CI fixtures for this Action.
 - For PDF/A-3 (Factur-X/ZUGFeRD) container checks, repair, and the French CTC profile: [facturxapi.com/docs](https://facturxapi.com/docs).
 - Walkthrough: adding the official 1.3.16 XSLT to GitHub Actions (YAML, BR-* codes, fixtures that must fail): https://facturxapi.com/blog/valider-ci-github-actions
