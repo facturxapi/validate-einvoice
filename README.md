@@ -2,8 +2,8 @@
 
 [![Self-test EN16931 action](https://github.com/facturxapi/validate-einvoice/actions/workflows/selftest.yml/badge.svg)](https://github.com/facturxapi/validate-einvoice/actions/workflows/selftest.yml) [![EN16931 upstream drift](https://github.com/facturxapi/validate-einvoice/actions/workflows/upstream-drift.yml/badge.svg)](https://github.com/facturxapi/validate-einvoice/actions/workflows/upstream-drift.yml) [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Validate%20EN16931-blue?logo=github)](https://github.com/marketplace/actions/validate-en16931-e-invoice)
 
-GitHub Action and local CLI that runs the official ConnectingEurope
-EN16931 1.3.16 XSLT (CII and UBL) on XML invoices and reports every
+GitHub Action that runs the official ConnectingEurope EN16931 1.3.16
+XSLT artefacts (CII and UBL) on XML invoices and reports every
 `svrl:failed-assert`.
 
 A green job means: the vendored 1.3.16 stylesheets produced zero
@@ -21,6 +21,29 @@ document.
 
 Pin a full commit SHA instead of `@v1` if you need a frozen tree.
 
+Copy-paste workflow: [`examples/validate-invoices.yml`](examples/validate-invoices.yml).
+
+## Public self-test (24 Aug 2026)
+
+Same pin as `@v1` (`b364f7c3`). One green workflow: official examples
+pass; mutants make the Action step fail (expected).
+
+- Run: https://github.com/facturxapi/validate-einvoice/actions/runs/32736104158
+- Official examples (ubuntu): [job](https://github.com/facturxapi/validate-einvoice/actions/runs/32736104158/job/97459169913)
+- Mutants must fail the Action step (ubuntu): [job](https://github.com/facturxapi/validate-einvoice/actions/runs/32736104158/job/97459170443)
+
+![Official examples must pass — public self-test, ubuntu](docs/selftest-pass.png)
+
+![Mutants: 10 public error annotations; the job stays green because those failures are expected](docs/selftest-mutants-fail.png)
+
+## Which FacturX repo should I use?
+
+- [validate-einvoice](https://github.com/facturxapi/validate-einvoice) — GitHub Action that runs the official ConnectingEurope EN16931 1.3.16 XSLT artefacts (CII/UBL).
+- [en16931-oracles](https://github.com/facturxapi/en16931-oracles) — Replayable fixtures, receipts and mutants for that same 1.3.16 pin.
+- [awesome-einvoicing](https://github.com/facturxapi/awesome-einvoicing) — Sourced map of specs, validators, libraries and corpora. Inclusion is not a ranking.
+
+## Local path / `fail-on`
+
 When this repository is checked out as the workflow repo (or vendored):
 
 ```yaml
@@ -29,9 +52,6 @@ When this repository is checked out as the workflow repo (or vendored):
     files: invoices/**/*.xml
 ```
 
-Copy-paste workflow: [`examples/validate-invoices.yml`](examples/validate-invoices.yml).
-
-### fail-on
 
 ```yaml
 # Default — any svrl:failed-assert fails the job
@@ -127,6 +147,8 @@ unit tests, and run the identity gate. Any difference is a failure.
   CIUS proof.
 - Not Factur-X / ZUGFeRD packaging, not PDF/A-3, not veraPDF.
 - Not a certification and not a product benchmark.
+- Not an official ConnectingEurope Action. It only runs the official
+  ConnectingEurope EN16931 1.3.16 XSLT artefacts.
 
 ## Licence
 
