@@ -23,6 +23,12 @@ Pin a full commit SHA instead of `@v1` if you need a frozen tree.
 
 Copy-paste workflow: [`examples/validate-invoices.yml`](examples/validate-invoices.yml).
 
+## Which FacturX repo should I use?
+
+- [validate-einvoice](https://github.com/facturxapi/validate-einvoice) — GitHub Action that runs the official ConnectingEurope EN16931 1.3.16 XSLT artefacts (CII/UBL).
+- [en16931-oracles](https://github.com/facturxapi/en16931-oracles) — Replayable fixtures, receipts and mutants for that same 1.3.16 pin.
+- [awesome-einvoicing](https://github.com/facturxapi/awesome-einvoicing) — Sourced map of specs, validators, libraries and corpora. Inclusion is not a ranking.
+
 ## Public self-test (24 Aug 2026)
 
 Same pin as `@v1` (`b364f7c3`). One green workflow: official examples
@@ -35,12 +41,6 @@ pass; mutants make the Action step fail (expected).
 ![Official examples must pass — public self-test, ubuntu](docs/selftest-pass.png)
 
 ![Mutants: 10 public error annotations; the job stays green because those failures are expected](docs/selftest-mutants-fail.png)
-
-## Which FacturX repo should I use?
-
-- [validate-einvoice](https://github.com/facturxapi/validate-einvoice) — GitHub Action that runs the official ConnectingEurope EN16931 1.3.16 XSLT artefacts (CII/UBL).
-- [en16931-oracles](https://github.com/facturxapi/en16931-oracles) — Replayable fixtures, receipts and mutants for that same 1.3.16 pin.
-- [awesome-einvoicing](https://github.com/facturxapi/awesome-einvoicing) — Sourced map of specs, validators, libraries and corpora. Inclusion is not a ranking.
 
 ## Local path / `fail-on`
 
