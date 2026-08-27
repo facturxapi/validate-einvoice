@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PROOF = ROOT / ".builder" / "proofs"
-REQUIREMENTS = ROOT / "requirements.txt"
+REQUIREMENTS = ROOT / "requirements.lock"
 VALIDATE = ROOT / "src" / "validate.py"
 EXPECTED_IDS = ROOT / "testdata" / "expected-ids.json"
 
@@ -53,7 +53,17 @@ def sha256_file(path: Path) -> str:
 def main() -> int:
     python = venv_python()
     PROOF.mkdir(parents=True, exist_ok=True)
-    pip_cmd = [str(python), "-m", "pip", "install", "--disable-pip-version-check", "-q", "-r", str(REQUIREMENTS)]
+    pip_cmd = [
+        str(python),
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--require-hashes",
+        "-q",
+        "-r",
+        str(REQUIREMENTS),
+    ]
     run(pip_cmd)
 
     print("=== 1. official examples must be GREEN (0 failed-assert, exit 0) ===")
@@ -134,6 +144,11 @@ def main() -> int:
     identity = run([str(python), str(ROOT / "tests" / "identity_gate.py")], check=False)
     if identity.returncode != 0:
         fail("identity gate failed")
+
+    print("=== 6. supply-chain gate ===")
+    supply = run([str(python), str(ROOT / "scripts" / "check_supply_chain.py")], check=False)
+    if supply.returncode != 0:
+        fail("supply-chain gate failed\n" + (supply.stdout or "") + (supply.stderr or ""))
 
     print()
     print("SELFTEST PASS")

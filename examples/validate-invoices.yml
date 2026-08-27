@@ -1,6 +1,8 @@
-# Example consumer workflow.
-# After publication, pin the Marketplace tag. Until then, use `uses: ./`
-# when this repository is the workflow checkout.
+# Example workflow for this repository (same-repo checkout).
+#
+# Downstream consumers: pin `facturxapi/validate-einvoice@<40-char-sha>` from the
+# lot-1 release notes after publish. The moving `@v1` tag is a mutable convenience
+# channel and currently points at pre-hardening `b364f7c3`.
 
 name: Validate EN16931 invoices
 
@@ -21,11 +23,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Run official EN16931 1.3.16 XSLT
         id: en16931
-        uses: facturxapi/validate-einvoice@v1
+        uses: ./
         with:
           files: testdata/official/*.xml
           syntax: auto
