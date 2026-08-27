@@ -13,15 +13,40 @@ document.
 
 ## Usage
 
+### Pinning (two release phases)
+
+| Channel | What it is | Supply-chain hardening |
+|---|---|---|
+| `@v1` major tag | **Mutable** Marketplace channel (convenience) | **No** on the current pointer (`b364f7c3`, pre–lot-1) |
+| Full commit SHA from a **lot-1 release** | Frozen tree | **Yes** — hashed lock + external `uses` pin gate |
+
+Until lot 1 is tagged, do **not** treat `b364f7c3` as a hardened pin. After the lot-1 release, use the 40-character SHA from the GitHub Release (not the old `v1` pointer).
+
+**Same-repo workflow** (this repository checked out):
+
+```yaml
+- uses: ./
+  with:
+    files: invoices/**/*.xml
+```
+
+**Downstream consumer** (after lot-1 release — replace with the published SHA):
+
+```yaml
+- uses: facturxapi/validate-einvoice@<40-char-sha-from-lot-1-release>
+  with:
+    files: invoices/**/*.xml
+```
+
+**Mutable channel** — `@v1` tracks the moving major tag (not frozen; currently pre-hardening):
+
 ```yaml
 - uses: facturxapi/validate-einvoice@v1
   with:
     files: invoices/**/*.xml
 ```
 
-Pin a full commit SHA instead of `@v1` if you need a frozen tree.
-
-Copy-paste workflow: [`examples/validate-invoices.yml`](examples/validate-invoices.yml).
+Copy-paste workflow: [`examples/validate-invoices.yml`](examples/validate-invoices.yml) (`uses: ./` for same-repo).
 
 ## Which FacturX repo should I use?
 
@@ -31,8 +56,7 @@ Copy-paste workflow: [`examples/validate-invoices.yml`](examples/validate-invoic
 
 ## Public self-test (24 Aug 2026)
 
-Same pin as `@v1` (`b364f7c3`). One green workflow: official examples
-pass; mutants make the Action step fail (expected).
+Pre–lot-1 public run on the **mutable `@v1` pointer** (`b364f7c3`, no supply-chain hardening). One green workflow: official examples pass; mutants make the Action step fail (expected).
 
 - Run: https://github.com/facturxapi/validate-einvoice/actions/runs/32736104158
 - Official examples (ubuntu): [job](https://github.com/facturxapi/validate-einvoice/actions/runs/32736104158/job/97459169913)
@@ -54,20 +78,26 @@ When this repository is checked out as the workflow repo (or vendored):
 
 
 ```yaml
-# Default — any svrl:failed-assert fails the job
+# Frozen — pin the lot-1 release SHA from GitHub Releases (not b364f7c3)
+- uses: facturxapi/validate-einvoice@<40-char-sha-from-lot-1-release>
+  with:
+    files: invoices/**/*.xml
+    fail-on: failed-assert
+
+# Mutable — @v1 major tag (currently pre-hardening)
 - uses: facturxapi/validate-einvoice@v1
   with:
     files: invoices/**/*.xml
     fail-on: failed-assert
 
-# Report only — the job stays green, the JSON still lists every id
-- uses: facturxapi/validate-einvoice@v1
+# Report only — same-repo or pinned release SHA
+- uses: ./
   with:
     files: invoices/**/*.xml
     fail-on: never
 
 # Fail only if one of these rule ids fires
-- uses: facturxapi/validate-einvoice@v1
+- uses: ./
   with:
     files: invoices/**/*.xml
     fail-on: BR-CO-15,BR-02
