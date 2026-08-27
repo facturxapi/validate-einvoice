@@ -300,14 +300,48 @@ def file_triggers_fail(row: dict[str, Any], fail_on: dict[str, Any]) -> bool:
     return any(item in watched for item in ids)
 
 
+ANNOTATION_TEXT_MAX = 220
+
+
+def escape_workflow_data(value: str) -> str:
+    """Encode workflow-command message text.
+
+    Percent-encode ``%`` first, then CR/LF. Encoding ``%`` first means a
+    literal ``%0A`` in SVRL text cannot become a newline after the runner
+    decodes the command.
+    """
+    return (
+        str(value)
+        .replace("%", "%25")
+        .replace("\r", "%0D")
+        .replace("\n", "%0A")
+    )
+
+
+def escape_workflow_file_property(value: str) -> str:
+    """Encode a workflow-command property (``file=``, ``title=``).
+
+    Same rules as the message body, then encode commas so
+    ``file=a,line=1.xml`` cannot inject extra properties.
+    """
+    return escape_workflow_data(value).replace(",", "%2C")
+
+
+def workflow_error_line(message: object) -> str:
+    """Single-line ``::error::`` command for configuration / engine errors."""
+    return f"::error::{escape_workflow_data(str(message))}"
+
+
 def annotation_line(rel_path: str, item: dict[str, str]) -> str:
-    rule_id = item["id"]
+    rule_id = escape_workflow_file_property(item["id"])
     text = item["text"] or "failed-assert"
-    text = text.replace("\r", " ").replace("\n", " ")
-    if len(text) > 220:
-        text = text[:217] + "..."
+    text = escape_workflow_data(text)
+    # Truncate AFTER escaping so a long ``%0A`` run cannot survive decode.
+    if len(text) > ANNOTATION_TEXT_MAX:
+        text = text[: ANNOTATION_TEXT_MAX - 3] + "..."
+    file_path = escape_workflow_file_property(rel_path)
     # title is the rule id; body repeats id then the SVRL text.
-    return f"::error file={rel_path},title={rule_id}::{rule_id}: {text}"
+    return f"::error file={file_path},title={rule_id}::{rule_id}: {text}"
 
 
 def markdown_summary(report: dict[str, Any]) -> str:
@@ -572,7 +606,7 @@ def main(argv: list[str] | None = None) -> int:
             emit_annotations=emit,
         )
     except (ConfigError, EngineError) as exc:
-        print(f"::error::{exc}" if os.environ.get("GITHUB_ACTIONS") == "true" else f"error: {exc}", file=sys.stderr)
+        print(workflow_error_line(exc) if os.environ.get("GITHUB_ACTIONS") == "true" else f"error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
 
     report_path = args.report
