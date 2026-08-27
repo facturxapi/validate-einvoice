@@ -304,11 +304,10 @@ ANNOTATION_TEXT_MAX = 220
 
 
 def escape_workflow_data(value: str) -> str:
-    """Encode workflow-command message text.
+    """B. User text after the second ``::`` (toolkit ``escapeData``).
 
-    Percent-encode ``%`` first, then CR/LF. Encoding ``%`` first means a
-    literal ``%0A`` in SVRL text cannot become a newline after the runner
-    decodes the command.
+    ``%`` → ``%25``, then ``\\r`` → ``%0D``, then ``\\n`` → ``%0A``.
+    Does not encode ``:`` or ``,`` so rule IDs stay readable.
     """
     return (
         str(value)
@@ -318,13 +317,16 @@ def escape_workflow_data(value: str) -> str:
     )
 
 
-def escape_workflow_file_property(value: str) -> str:
-    """Encode a workflow-command property (``file=``, ``title=``).
+def escape_workflow_property(value: str) -> str:
+    """A. Command properties ``file=`` / ``title=`` (toolkit ``escapeProperty``).
 
-    Same rules as the message body, then encode commas so
-    ``file=a,line=1.xml`` cannot inject extra properties.
+    Same as ``escape_workflow_data``, then ``:`` → ``%3A``, then ``,`` → ``%2C``.
     """
-    return escape_workflow_data(value).replace(",", "%2C")
+    return (
+        escape_workflow_data(value)
+        .replace(":", "%3A")
+        .replace(",", "%2C")
+    )
 
 
 def workflow_error_line(message: object) -> str:
@@ -333,15 +335,16 @@ def workflow_error_line(message: object) -> str:
 
 
 def annotation_line(rel_path: str, item: dict[str, str]) -> str:
-    rule_id = escape_workflow_file_property(item["id"])
-    text = item["text"] or "failed-assert"
-    text = escape_workflow_data(text)
+    # A: properties (file=, title=) encode : and ,
+    file_path = escape_workflow_property(rel_path)
+    title = escape_workflow_property(item["id"])
+    # B: user-visible message encodes % / CR / LF only — rule IDs stay readable.
+    rule_id = escape_workflow_data(item["id"])
+    text = escape_workflow_data(item["text"] or "failed-assert")
     # Truncate AFTER escaping so a long ``%0A`` run cannot survive decode.
     if len(text) > ANNOTATION_TEXT_MAX:
         text = text[: ANNOTATION_TEXT_MAX - 3] + "..."
-    file_path = escape_workflow_file_property(rel_path)
-    # title is the rule id; body repeats id then the SVRL text.
-    return f"::error file={file_path},title={rule_id}::{rule_id}: {text}"
+    return f"::error file={file_path},title={title}::{rule_id}: {text}"
 
 
 def markdown_summary(report: dict[str, Any]) -> str:

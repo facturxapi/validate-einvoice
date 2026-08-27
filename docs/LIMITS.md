@@ -23,9 +23,15 @@ This change does not alter entity or URI resolution.
 
 ## Annotation text
 
-Workflow-command escaping runs first (`%` → `%25`, then CR/LF →
-`%0D`/`%0A`; commas in `file=` and `title=` → `%2C`). The SVRL message
-body is then truncated to 220 characters.
+Workflow-command escaping matches the GitHub toolkit
+(`actions/toolkit` `packages/core/src/command.ts`):
+
+- **A. Properties** (`file=`, `title=`): `%` → `%25`, then CR/LF →
+  `%0D`/`%0A`, then `:` → `%3A`, then `,` → `%2C`.
+- **B. User text** (after the second `::`): `%` → `%25`, then CR/LF
+  only. Colons and commas stay readable (rule IDs).
+
+The SVRL message body is then truncated to 220 characters.
 
 ## CI job timeouts
 
