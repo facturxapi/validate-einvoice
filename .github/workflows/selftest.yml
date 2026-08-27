@@ -12,6 +12,7 @@ jobs:
   selftest:
     name: selftest ${{ matrix.os }} py${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +30,7 @@ jobs:
   action-official:
     name: action official ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -45,6 +47,7 @@ jobs:
   action-mutants:
     name: action mutants ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

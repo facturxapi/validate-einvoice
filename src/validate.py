@@ -300,14 +300,51 @@ def file_triggers_fail(row: dict[str, Any], fail_on: dict[str, Any]) -> bool:
     return any(item in watched for item in ids)
 
 
+ANNOTATION_TEXT_MAX = 220
+
+
+def escape_workflow_data(value: str) -> str:
+    """B. User text after the second ``::`` (toolkit ``escapeData``).
+
+    ``%`` → ``%25``, then ``\\r`` → ``%0D``, then ``\\n`` → ``%0A``.
+    Does not encode ``:`` or ``,`` so rule IDs stay readable.
+    """
+    return (
+        str(value)
+        .replace("%", "%25")
+        .replace("\r", "%0D")
+        .replace("\n", "%0A")
+    )
+
+
+def escape_workflow_property(value: str) -> str:
+    """A. Command properties ``file=`` / ``title=`` (toolkit ``escapeProperty``).
+
+    Same as ``escape_workflow_data``, then ``:`` → ``%3A``, then ``,`` → ``%2C``.
+    """
+    return (
+        escape_workflow_data(value)
+        .replace(":", "%3A")
+        .replace(",", "%2C")
+    )
+
+
+def workflow_error_line(message: object) -> str:
+    """Single-line ``::error::`` command for configuration / engine errors."""
+    return f"::error::{escape_workflow_data(str(message))}"
+
+
 def annotation_line(rel_path: str, item: dict[str, str]) -> str:
-    rule_id = item["id"]
-    text = item["text"] or "failed-assert"
-    text = text.replace("\r", " ").replace("\n", " ")
-    if len(text) > 220:
-        text = text[:217] + "..."
-    # title is the rule id; body repeats id then the SVRL text.
-    return f"::error file={rel_path},title={rule_id}::{rule_id}: {text}"
+    # A: properties (file=, title=) encode : and ,
+    file_path = escape_workflow_property(rel_path)
+    title = escape_workflow_property(item["id"])
+    # B: user-visible message encodes % / CR / LF only — rule IDs stay readable.
+    rule_id = escape_workflow_data(item["id"])
+    text = escape_workflow_data(item["text"] or "failed-assert")
+    # Truncate AFTER escaping so a long ``%0A`` run cannot survive decode.
+    if len(text) > ANNOTATION_TEXT_MAX:
+        text = text[: ANNOTATION_TEXT_MAX - 3] + "..."
+    return f"::error file={file_path},title={title}::{rule_id}: {text}"
 
 
 def markdown_summary(report: dict[str, Any]) -> str:
@@ -572,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
             emit_annotations=emit,
         )
     except (ConfigError, EngineError) as exc:
-        print(f"::error::{exc}" if os.environ.get("GITHUB_ACTIONS") == "true" else f"error: {exc}", file=sys.stderr)
+        print(workflow_error_line(exc) if os.environ.get("GITHUB_ACTIONS") == "true" else f"error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
 
     report_path = args.report
