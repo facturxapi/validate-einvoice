@@ -4,3 +4,16 @@
 *.xslt text eol=lf
 vendor/**/*.sch text eol=lf
 vendor/**/*.xml text eol=lf
+
+# Supply-chain tree digest is hashed on disk (scripts/check_supply_chain.py).
+# A Windows checkout with CRLF conversion fails the tree.sha256 pin
+# (run https://github.com/facturxapi/validate-einvoice/actions/runs/33026328581).
+.github/workflows/*.yml text eol=lf
+supply-chain/** text eol=lf
+action.yml text eol=lf
+SECURITY.md text eol=lf
+docs/** text eol=lf
+examples/** text eol=lf
+requirements.txt text eol=lf
+requirements.lock text eol=lf
+scripts/check_supply_chain.py text eol=lf
