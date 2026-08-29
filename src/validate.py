@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import gc
 import glob
 import hashlib
 import io
@@ -17,8 +18,10 @@ import os
 import re
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 import xml.parsers.expat
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -61,6 +64,16 @@ class ConfigError(Exception):
 
 class EngineError(Exception):
     """XSLT engine error (exit 2)."""
+
+
+class SnapshotCleanupError(EngineError):
+    """Private snapshot residue after transform (exit 2).
+
+    Message is generic: no temp path, no invoice bytes.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("private invoice snapshot could not be removed")
 
 
 class DtdRefused(ConfigError):
@@ -127,13 +140,105 @@ def _privatize_tmpdir(tmpdir: str) -> None:
         os.chmod(tmpdir, 0o700)
 
 
+SNAPSHOT_CLEANUP_ATTEMPTS = 8
+SNAPSHOT_CLEANUP_DELAY_SEC = 0.05
+
+
+def snapshot_cleanup_sleep(seconds: float) -> None:
+    """Sleep hook for snapshot cleanup retry. Tests replace this with a no-op."""
+    if seconds:
+        time.sleep(seconds)
+
+
+def remove_with_retry(
+    path: str,
+    *,
+    remover: Callable[[str], None],
+    attempts: int = SNAPSHOT_CLEANUP_ATTEMPTS,
+    delay: float = SNAPSHOT_CLEANUP_DELAY_SEC,
+    sleeper: Callable[[float], None] | None = None,
+) -> None:
+    """Bounded remove. Tests pass attempts and a 0-delay sleeper."""
+    if sleeper is None:
+        sleeper = snapshot_cleanup_sleep
+    n = max(1, int(attempts))
+    for i in range(n):
+        try:
+            remover(path)
+        except FileNotFoundError:
+            return
+        except OSError:
+            pass
+        if not Path(path).exists():
+            return
+        if i + 1 < n:
+            sleeper(delay)
+
+
+def cleanup_private_snapshot(
+    snap: str | None,
+    tmpdir: str,
+    *,
+    attempts: int | None = None,
+    delay: float | None = None,
+    sleeper: Callable[[float], None] | None = None,
+    unlinker: Callable[[str], None] | None = None,
+    rmdirer: Callable[[str], None] | None = None,
+) -> None:
+    """Unlink snapshot file, then rmdir private directory, then verify both gone.
+
+    Raises SnapshotCleanupError on residue. Message has no path and no
+    invoice bytes.
+    """
+    if attempts is None:
+        attempts = SNAPSHOT_CLEANUP_ATTEMPTS
+    if delay is None:
+        delay = SNAPSHOT_CLEANUP_DELAY_SEC
+    if unlinker is None:
+        unlinker = os.unlink
+    if rmdirer is None:
+        rmdirer = os.rmdir
+    if snap is not None:
+        remove_with_retry(
+            snap,
+            remover=unlinker,
+            attempts=attempts,
+            delay=delay,
+            sleeper=sleeper,
+        )
+    remove_with_retry(
+        tmpdir,
+        remover=rmdirer,
+        attempts=attempts,
+        delay=delay,
+        sleeper=sleeper,
+    )
+    snap_left = snap is not None and Path(snap).exists()
+    dir_left = Path(tmpdir).exists()
+    if snap_left or dir_left:
+        raise SnapshotCleanupError()
+
+
 @contextlib.contextmanager
-def private_snapshot_file(data: bytes) -> Iterator[Path]:
-    """Write snapshot bytes to a private temp file; yield that path; always delete.
+def private_snapshot_file(
+    data: bytes,
+    *,
+    attempts: int | None = None,
+    delay: float | None = None,
+    sleeper: Callable[[float], None] | None = None,
+    unlinker: Callable[[str], None] | None = None,
+    rmdirer: Callable[[str], None] | None = None,
+) -> Iterator[Path]:
+    """Write snapshot bytes to a private temp file; yield that path.
 
     SaxonC 13 has no byte-backed source API (parse_xml xml_text is str only).
     The original user path is never yielded. Bytes are copied as-is (no
     decode, no re-serialize, LF/CRLF preserved).
+
+    After the caller finishes (Saxon must have returned from
+    transform_to_string and dropped snapshot handles), cleanup unlinks the
+    file, then removes the directory, with bounded retry. Both paths are
+    then checked with Path.exists(). Residue raises SnapshotCleanupError.
     """
     tmpdir = tempfile.mkdtemp(prefix="ve-snap-")
     snap = None
@@ -154,15 +259,15 @@ def private_snapshot_file(data: bytes) -> Iterator[Path]:
                 os.close(fd)
             except OSError:
                 pass
-        if snap is not None:
-            try:
-                os.unlink(snap)
-            except OSError:
-                pass
-        try:
-            os.rmdir(tmpdir)
-        except OSError:
-            pass
+        cleanup_private_snapshot(
+            snap,
+            tmpdir,
+            attempts=attempts,
+            delay=delay,
+            sleeper=sleeper,
+            unlinker=unlinker,
+            rmdirer=rmdirer,
+        )
 
 
 def sha256_file(path: Path) -> str:
@@ -406,16 +511,31 @@ class SaxonEngine:
             if executable is None:
                 raise EngineError(f"XSLT compile failed: {xslt_path.name}")
             self._compiled[key] = executable
+        svrl = None
         with private_snapshot_file(data) as snap:
-            svrl = executable.transform_to_string(source_file=str(snap))
+            try:
+                svrl = executable.transform_to_string(source_file=str(snap))
+            finally:
+                # Saxon finished this source. Drop native wrappers so the
+                # snapshot file can be unlinked (needed on Windows).
+                gc.collect()
         if svrl is None:
             raise EngineError(f"XSLT produced no SVRL: {name}")
         return svrl
 
     def close(self) -> None:
-        closer = getattr(self._proc, "release", None)
-        if callable(closer):
-            closer()
+        compiled = getattr(self, "_compiled", None)
+        if compiled is not None:
+            compiled.clear()
+        self._xslt = None
+        proc = getattr(self, "_proc", None)
+        self._proc = None
+        if proc is not None:
+            closer = getattr(proc, "release", None)
+            if callable(closer):
+                closer()
+            del proc
+        gc.collect()
 
 
 def canonical_json(payload: Any) -> str:

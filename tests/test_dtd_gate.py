@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import warnings
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,6 +37,7 @@ except ImportError:
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads = True
+    block_on_close = False
 
 
 class HitHandler(http.server.BaseHTTPRequestHandler):
@@ -55,7 +57,12 @@ class HitHandler(http.server.BaseHTTPRequestHandler):
         return None
 
 
-def start_http() -> tuple[ThreadingHTTPServer, list[str]]:
+@contextlib.contextmanager
+def http_probe_server(*, join_timeout: float = 5.0):
+    """One HTTP probe used by SYSTEM tests and the B document() probe.
+
+    Start in a thread; always shutdown, server_close, join; assert stopped.
+    """
     hits: list[str] = []
 
     class BoundHandler(HitHandler):
@@ -63,9 +70,20 @@ def start_http() -> tuple[ThreadingHTTPServer, list[str]]:
 
     BoundHandler.hits = hits
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), BoundHandler)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=httpd.serve_forever, name="ve-http-probe", daemon=True
+    )
     thread.start()
-    return httpd, hits
+    try:
+        yield httpd, hits
+    finally:
+        try:
+            httpd.shutdown()
+        finally:
+            httpd.server_close()
+            thread.join(timeout=join_timeout)
+            if thread.is_alive():
+                raise AssertionError("http probe thread still running")
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -79,6 +97,21 @@ def dump_xsl(dir_path: Path) -> Path:
 <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
   <xsl:output method="text"/>
   <xsl:template match="/"><xsl:value-of select="string(.)"/></xsl:template>
+</xsl:stylesheet>
+"""
+    )
+    return path
+
+
+def document_http_xsl(dir_path: Path) -> Path:
+    """Test-only stylesheet: document($uri). Not under testdata/ official or mutants."""
+    path = dir_path / "document-http.xsl"
+    path.write_bytes(
+        b"""<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+  <xsl:output method="text"/>
+  <xsl:param name="uri" required="yes"/>
+  <xsl:template match="/"><xsl:value-of select="document($uri)"/></xsl:template>
 </xsl:stylesheet>
 """
     )
@@ -153,6 +186,18 @@ class GateMechanismTests(unittest.TestCase):
         self.assertIn("SAXON_ALLOWED_PROTOCOLS_VALUE", src)
         self.assertNotIn('""', src.split("set_configuration_property")[1][:400])
 
+    def test_snapshot_cleanup_is_verified_not_swallowed(self) -> None:
+        src = inspect.getsource(validate.cleanup_private_snapshot)
+        self.assertIn("SnapshotCleanupError", src)
+        self.assertIn("exists()", src)
+        helper = inspect.getsource(validate.remove_with_retry)
+        self.assertIn("attempts", helper)
+        snap_src = inspect.getsource(validate.private_snapshot_file)
+        self.assertNotIn("always delete", snap_src)
+        self.assertIn("cleanup_private_snapshot", snap_src)
+        close_src = inspect.getsource(validate.SaxonEngine.close)
+        self.assertIn("gc.collect", close_src)
+
 
 class GateAdversarialTests(unittest.TestCase):
     def test_no_dtd_control_parse_ok_bytes_unchanged(self) -> None:
@@ -195,20 +240,16 @@ class GateAdversarialTests(unittest.TestCase):
             xml_path = base / "system-file.xml"
             xml_path.write_bytes(data)
             before = sha256_bytes(xml_path.read_bytes())
-            httpd, hits = start_http()
-            try:
+            with http_probe_server() as (_httpd, hits):
                 with self.assertRaises(validate.DtdRefused) as ctx:
                     validate.gate_invoice_path(xml_path)
-            finally:
-                httpd.shutdown()
             self.assertEqual(hits, [])
             self.assertNotIn(CANARY, str(ctx.exception))
             self.assertEqual(sha256_bytes(xml_path.read_bytes()), before)
             self.assertEqual(canary.read_bytes(), (CANARY + "\n").encode("ascii"))
 
     def test_system_http_refused_zero_get(self) -> None:
-        httpd, hits = start_http()
-        try:
+        with http_probe_server() as (httpd, hits):
             host, port = httpd.server_address[:2]
             url = f"http://{host}:{port}/entity"
             data = (
@@ -221,12 +262,9 @@ class GateAdversarialTests(unittest.TestCase):
                 validate.gate_invoice_bytes(data, name="system-http.xml")
             self.assertEqual(hits, [])
             self.assertEqual(sha256_bytes(data), before)
-        finally:
-            httpd.shutdown()
 
     def test_public_http_refused_zero_get(self) -> None:
-        httpd, hits = start_http()
-        try:
+        with http_probe_server() as (httpd, hits):
             host, port = httpd.server_address[:2]
             url = f"http://{host}:{port}/public.dtd"
             data = (
@@ -240,8 +278,6 @@ class GateAdversarialTests(unittest.TestCase):
                 validate.gate_invoice_bytes(data, name="public-http.xml")
             self.assertEqual(hits, [])
             self.assertEqual(ctx.exception.pubid, "-//GATE//DTD Foo 1.0//EN")
-        finally:
-            httpd.shutdown()
 
     def test_external_dtd_system_file_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -281,8 +317,7 @@ class GateAdversarialTests(unittest.TestCase):
 @unittest.skipUnless(HAS_SAXON, "saxonche not installed")
 class BeforeAfterSaxonTests(unittest.TestCase):
     def test_current_follows_system_http_after_c_zero_get(self) -> None:
-        httpd, hits = start_http()
-        try:
+        with http_probe_server() as (httpd, hits):
             host, port = httpd.server_address[:2]
             url = f"http://{host}:{port}/entity"
             with tempfile.TemporaryDirectory() as tmp:
@@ -315,8 +350,6 @@ class BeforeAfterSaxonTests(unittest.TestCase):
                     finally:
                         engine.close()
                 self.assertEqual(hits, [])
-        finally:
-            httpd.shutdown()
 
     def test_current_follows_system_file_after_c_no_canary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -396,8 +429,7 @@ class OfficialBytesAndCrlfTests(unittest.TestCase):
             self.assertNotEqual(row["sha256"], sha256_bytes(raw))
 
     def test_validate_files_refuses_doctype_before_saxon(self) -> None:
-        httpd, hits = start_http()
-        try:
+        with http_probe_server() as (httpd, hits):
             host, port = httpd.server_address[:2]
             url = f"http://{host}:{port}/entity"
             with tempfile.TemporaryDirectory() as tmp:
@@ -418,8 +450,6 @@ class OfficialBytesAndCrlfTests(unittest.TestCase):
                         root=ROOT,
                     )
                 self.assertEqual(hits, [])
-        finally:
-            httpd.shutdown()
 
     def test_b_does_not_break_stylesheet_file_and_source_file(self) -> None:
         path = ROOT / "testdata" / "official" / "CII_example3.xml"
@@ -445,6 +475,7 @@ class PrivateSnapshotFileTests(unittest.TestCase):
             yielded: Path | None = None
             with validate.private_snapshot_file(data) as snap:
                 yielded = snap
+                self.assertTrue(snap.exists())
                 self.assertEqual(snap.read_bytes(), data)
                 self.assertNotEqual(snap.resolve(), user.resolve())
                 if os.name != "nt":
@@ -454,6 +485,113 @@ class PrivateSnapshotFileTests(unittest.TestCase):
             self.assertFalse(yielded.exists())
             self.assertFalse(yielded.parent.exists())
             self.assertEqual(user.read_bytes(), data)
+
+    def test_normal_cleanup_snapshot_gone_after_use(self) -> None:
+        data = b"<foo>SNAPSHOT_CLEANUP_CONTROL</foo>\n"
+        yielded: Path | None = None
+        parent: Path | None = None
+        with validate.private_snapshot_file(data) as snap:
+            yielded = snap
+            parent = snap.parent
+            self.assertTrue(snap.exists())
+            self.assertTrue(parent.exists())
+            self.assertEqual(snap.read_bytes(), data)
+        assert yielded is not None
+        assert parent is not None
+        self.assertFalse(yielded.exists())
+        self.assertFalse(parent.exists())
+
+    def test_unlink_always_fails_raises_cleanup_error_no_paths_in_message(self) -> None:
+        secret = b"<foo>INVOICE_SECRET_BYTES_9f3a</foo>\n"
+        calls: list[str] = []
+        sleeps: list[float] = []
+
+        def boom(path: str) -> None:
+            calls.append(path)
+            raise OSError("simulated unlink failure")
+
+        yielded: Path | None = None
+        try:
+            with self.assertRaises(validate.SnapshotCleanupError) as ctx:
+                with validate.private_snapshot_file(
+                    secret,
+                    attempts=4,
+                    delay=0.0,
+                    sleeper=sleeps.append,
+                    unlinker=boom,
+                ) as snap:
+                    yielded = snap
+                    self.assertTrue(snap.exists())
+            assert yielded is not None
+            self.assertEqual(len(calls), 4)
+            self.assertTrue(sleeps)
+            self.assertTrue(all(s == 0.0 for s in sleeps))
+            msg = str(ctx.exception)
+            self.assertNotIn(str(yielded), msg)
+            self.assertNotIn(str(yielded.parent), msg)
+            self.assertNotIn("INVOICE_SECRET_BYTES_9f3a", msg)
+            self.assertNotIn("ve-snap-", msg)
+            self.assertIsInstance(ctx.exception, validate.EngineError)
+        finally:
+            if yielded is not None:
+                try:
+                    os.unlink(yielded)
+                except OSError:
+                    pass
+                try:
+                    os.rmdir(yielded.parent)
+                except OSError:
+                    pass
+
+    def test_unlink_fails_once_then_succeeds(self) -> None:
+        data = b"<foo>RETRY_THEN_OK</foo>\n"
+        real_unlink = os.unlink
+        state = {"n": 0}
+
+        def flaky(path: str) -> None:
+            state["n"] += 1
+            if state["n"] == 1:
+                raise OSError("first unlink fails")
+            real_unlink(path)
+
+        sleeps: list[float] = []
+        yielded: Path | None = None
+        with validate.private_snapshot_file(
+            data,
+            attempts=4,
+            delay=0.0,
+            sleeper=sleeps.append,
+            unlinker=flaky,
+        ) as snap:
+            yielded = snap
+            self.assertTrue(snap.exists())
+        assert yielded is not None
+        self.assertGreaterEqual(state["n"], 2)
+        self.assertTrue(sleeps)
+        self.assertFalse(yielded.exists())
+        self.assertFalse(yielded.parent.exists())
+
+
+class HttpProbeServerTests(unittest.TestCase):
+    def test_context_manager_stops_thread_no_resource_warning(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            with http_probe_server() as (httpd, hits):
+                host, port = httpd.server_address[:2]
+                import urllib.request
+
+                with urllib.request.urlopen(
+                    f"http://{host}:{port}/ping", timeout=2
+                ) as resp:
+                    resp.read()
+                self.assertEqual(hits, ["/ping"])
+            import gc as _gc
+
+            _gc.collect()
+            sock_warns = [
+                w for w in caught if issubclass(w.category, ResourceWarning)
+            ]
+            self.assertEqual(sock_warns, [])
 
 
 def anti_pattern_transform_user_path(
@@ -589,8 +727,7 @@ class SameBytesToctouTests(unittest.TestCase):
                 self.assertFalse(snap.exists())
 
     def test_validate_files_hook_http_zero_get(self) -> None:
-        httpd, hits = start_http()
-        try:
+        with http_probe_server() as (httpd, hits):
             host, port = httpd.server_address[:2]
             url = f"http://{host}:{port}/entity"
             hostile = (
@@ -625,8 +762,182 @@ class SameBytesToctouTests(unittest.TestCase):
                     result["payload"]["files"][0]["sha256"], sha256_bytes(benign)
                 )
                 self.assertEqual(result["payload"]["files"][0]["verdict"], "pass")
+
+
+@unittest.skipUnless(HAS_SAXON, "saxonche not installed")
+class SnapshotCleanupValidationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        os.environ["EN16931_ACTION_ROOT"] = str(ROOT)
+
+    def test_unlink_always_fails_does_not_return_success(self) -> None:
+        path = ROOT / "testdata" / "official" / "CII_example3.xml"
+        secret = path.read_bytes()
+        self.assertNotIn(b"<!DOCTYPE", secret)
+        calls: list[str] = []
+
+        def boom(path_str: str) -> None:
+            calls.append(path_str)
+            raise OSError("simulated unlink failure")
+
+        original = validate.private_snapshot_file
+
+        @contextlib.contextmanager
+        def wrapped(data: bytes, **kwargs):
+            kwargs.setdefault("attempts", 3)
+            kwargs.setdefault("delay", 0.0)
+            kwargs.setdefault("sleeper", lambda _s: None)
+            kwargs["unlinker"] = boom
+            with original(data, **kwargs) as snap:
+                yield snap
+
+        validate.private_snapshot_file = wrapped  # type: ignore[method-assign]
+        try:
+            with self.assertRaises(validate.SnapshotCleanupError) as ctx:
+                validate.validate_files(
+                    [path],
+                    syntax="auto",
+                    fail_on_raw="failed-assert",
+                    version="1.3.16",
+                    root=ROOT,
+                    cwd=ROOT,
+                )
+            self.assertGreaterEqual(len(calls), 3)
+            msg = str(ctx.exception)
+            for item in calls:
+                self.assertNotIn(item, msg)
+            self.assertNotIn("ve-snap-", msg)
+            snippet = secret[:40].decode("utf-8", "replace")
+            self.assertNotIn(snippet, msg)
         finally:
-            httpd.shutdown()
+            validate.private_snapshot_file = original
+            for item in calls:
+                try:
+                    os.unlink(item)
+                except OSError:
+                    pass
+                try:
+                    os.rmdir(str(Path(item).parent))
+                except OSError:
+                    pass
+
+    def test_unlink_retry_then_validation_completes(self) -> None:
+        path = ROOT / "testdata" / "official" / "CII_example3.xml"
+        real_unlink = os.unlink
+        state = {"n": 0}
+
+        def flaky(path_str: str) -> None:
+            state["n"] += 1
+            if state["n"] == 1:
+                raise OSError("first unlink fails")
+            real_unlink(path_str)
+
+        original = validate.private_snapshot_file
+
+        @contextlib.contextmanager
+        def wrapped(data: bytes, **kwargs):
+            kwargs.setdefault("attempts", 4)
+            kwargs.setdefault("delay", 0.0)
+            kwargs.setdefault("sleeper", lambda _s: None)
+            kwargs["unlinker"] = flaky
+            with original(data, **kwargs) as snap:
+                yield snap
+
+        validate.private_snapshot_file = wrapped  # type: ignore[method-assign]
+        try:
+            result = validate.validate_files(
+                [path],
+                syntax="auto",
+                fail_on_raw="failed-assert",
+                version="1.3.16",
+                root=ROOT,
+                cwd=ROOT,
+            )
+        finally:
+            validate.private_snapshot_file = original
+        self.assertGreaterEqual(state["n"], 2)
+        self.assertEqual(result["payload"]["verdict"], "pass")
+        self.assertEqual(
+            result["payload"]["files"][0]["sha256"], sha256_bytes(path.read_bytes())
+        )
+
+
+def _document_http_subprocess(
+    xml_path: Path,
+    xslt_path: Path,
+    url: str,
+    *,
+    allowed_protocols: str | None,
+    timeout: float = 12.0,
+) -> subprocess.CompletedProcess[str]:
+    """Run document() against url. allowed_protocols=None is the B mutant."""
+    script = (
+        "from saxonche import PySaxonProcessor\n"
+        "import sys\n"
+        "xml_path, xslt_path, url, mode = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]\n"
+        "proc = PySaxonProcessor(license=False)\n"
+        "if mode == 'file':\n"
+        "    proc.set_configuration_property(\n"
+        "        'http://saxon.sf.net/feature/allowedProtocols', 'file'\n"
+        "    )\n"
+        "xslt = proc.new_xslt30_processor()\n"
+        "exe = xslt.compile_stylesheet(stylesheet_file=xslt_path)\n"
+        "exe.set_parameter('uri', proc.make_string_value(url))\n"
+        "try:\n"
+        "    out = exe.transform_to_string(source_file=xml_path)\n"
+        "    sys.stdout.write('TRANSFORM_OK\\n')\n"
+        "except Exception:\n"
+        "    sys.stdout.write('TRANSFORM_FAIL\\n')\n"
+    )
+    mode = "file" if allowed_protocols == "file" else "none"
+    return subprocess.run(
+        [sys.executable, "-c", script, str(xml_path), str(xslt_path), url, mode],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+@unittest.skipUnless(HAS_SAXON, "saxonche not installed")
+class AllowedProtocolsBTests(unittest.TestCase):
+    def test_document_http_mutant_gets_implementation_zero_get_fails_closed(self) -> None:
+        xml = (
+            b'<?xml version="1.0" encoding="UTF-8"?>\n'
+            b"<foo>NO_DTD_DOCUMENT_PROBE</foo>\n"
+        )
+        self.assertNotIn(b"<!DOCTYPE", xml)
+        self.assertNotIn(b"DOCTYPE", xml)
+        with http_probe_server() as (httpd, hits):
+            host, port = httpd.server_address[:2]
+            url = f"http://{host}:{port}/document-fn"
+            with tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                xml_path = base / "no-dtd.xml"
+                xml_path.write_bytes(xml)
+                xslt_path = document_http_xsl(base)
+                hits.clear()
+                try:
+                    mutant = _document_http_subprocess(
+                        xml_path, xslt_path, url, allowed_protocols=None
+                    )
+                except subprocess.TimeoutExpired:
+                    mutant = None
+                self.assertGreaterEqual(
+                    len(hits),
+                    1,
+                    msg="B mutant without allowedProtocols=file must attempt HTTP",
+                )
+                hits.clear()
+                impl = _document_http_subprocess(
+                    xml_path, xslt_path, url, allowed_protocols="file"
+                )
+                self.assertEqual(hits, [])
+                self.assertTrue(
+                    impl.stdout.startswith("TRANSFORM_FAIL"),
+                    msg="B with allowedProtocols=file must fail closed",
+                )
+                self.assertNotEqual(validate.SAXON_ALLOWED_PROTOCOLS_VALUE, "")
+                if mutant is not None:
+                    self.assertIn(mutant.stdout.split("\n", 1)[0], {"TRANSFORM_OK", "TRANSFORM_FAIL"})
 
 
 class DetectSyntaxSnapshotTests(unittest.TestCase):
