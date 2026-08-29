@@ -290,6 +290,15 @@ def canonical_json(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
 
 
+def write_canonical_report(path: Path, report_text: str) -> None:
+    """Write UTF-8 LF report bytes. Never text-mode write (Windows injects CR LF)."""
+    data = report_text.encode("utf-8")
+    if b"\r" in data:
+        raise ValueError("canonical report must not contain CR")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
 def file_triggers_fail(row: dict[str, Any], fail_on: dict[str, Any]) -> bool:
     if fail_on["mode"] == "never":
         return False
@@ -617,8 +626,7 @@ def main(argv: list[str] | None = None) -> int:
         report_path = "en16931-report.json"
     if report_path:
         out = Path(report_path)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(result["report_text"], encoding="utf-8")
+        write_canonical_report(out, result["report_text"])
         result["report_path"] = display_path(out)
     else:
         result["report_path"] = ""

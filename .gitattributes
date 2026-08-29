@@ -17,3 +17,7 @@ examples/** text eol=lf
 requirements.txt text eol=lf
 requirements.lock text eol=lf
 scripts/check_supply_chain.py text eol=lf
+
+# Testdata fixtures only. Windows checkout must stay LF so files[].sha256
+# matches Linux/macOS. User invoices are not rewritten.
+testdata/**/*.xml text eol=lf
