@@ -33,7 +33,22 @@ Workflow-command escaping matches the GitHub toolkit
 
 The SVRL message body is then truncated to 220 characters.
 
+## Cross-OS bytes
+
+`testdata/**/*.xml` is pinned `eol=lf` so fixture checkouts are LF on
+Linux, macOS, and Windows. That pin is testdata only. User invoices are
+hashed as received (raw file bytes). Validation reports are UTF-8 with
+LF endings; they are written as bytes so Windows cannot inject CR LF.
+
 ## CI job timeouts
 
-`timeout-minutes` is 20 on Self-test jobs and 15 on Supply-chain and
-upstream-drift jobs. Those bound the runner job, not invoice size.
+`timeout-minutes` is 20 on Self-test jobs, 15 on `selftest-gate`, and 15
+on Supply-chain and upstream-drift jobs. Those bound the runner job, not
+invoice size.
+
+## CI token (GITHUB_TOKEN)
+
+The Self-test workflow grants `contents: read` only. Same-run
+`upload-artifact` / `download-artifact` do not take a token with
+`actions: write` / `actions: read`. Jobs that `uses: ./` must not
+hold Actions mutation rights.

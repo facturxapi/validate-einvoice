@@ -4,3 +4,5 @@ __pycache__/
 .builder/
 en16931-report.json
 .DS_Store
+selftest-reports/
+selftest-reports-all/

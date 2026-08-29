@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Supply-chain gate: pinned third-party actions and hashed Python dependencies."""
+"""Supply-chain gate: pinned third-party actions, hashed Python dependencies, local-action token scope."""
 
 from __future__ import annotations
 
@@ -216,6 +216,228 @@ def check_tree_digest(errors: list[str]) -> None:
             errors.append(f"tree digest drift: {rel}")
 
 
+
+def strip_yaml_comment(line: str) -> str:
+    """Drop unquoted `#` comments. Quoted `#` is kept.
+
+    Heuristic, not YAML 1.2: GitHub Actions workflows in this repo are
+    block-style 2-space mappings. A line like `# actions: write` cannot
+    satisfy the permissions gate because it never becomes a key.
+    """
+    out: list[str] = []
+    in_single = False
+    in_double = False
+    escaped = False
+    for ch in line:
+        if in_single:
+            out.append(ch)
+            if ch == "'":
+                in_single = False
+            continue
+        if in_double:
+            out.append(ch)
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == '"':
+                in_double = False
+            continue
+        if ch == "#":
+            break
+        if ch == "'":
+            in_single = True
+            out.append(ch)
+            continue
+        if ch == '"':
+            in_double = True
+            out.append(ch)
+            continue
+        out.append(ch)
+    return "".join(out).rstrip()
+
+
+def _unquote_scalar(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def _parse_flow_mapping(raw: str) -> dict[str, str]:
+    inner = raw.strip()
+    if inner.startswith("{") and inner.endswith("}"):
+        inner = inner[1:-1].strip()
+    if not inner:
+        return {}
+    out: dict[str, str] = {}
+    for part in inner.split(","):
+        if ":" not in part:
+            continue
+        key, _, value = part.partition(":")
+        out[_unquote_scalar(key)] = _unquote_scalar(value)
+    return out
+
+
+def _parse_perm_rhs(raw: str) -> dict[str, str] | str | None:
+    raw = raw.strip()
+    if not raw:
+        return None
+    if raw.startswith("{") and raw.endswith("}"):
+        return _parse_flow_mapping(raw)
+    return _unquote_scalar(raw)
+
+
+def _iter_code_lines(text: str) -> list[tuple[int, int, str]]:
+    lines: list[tuple[int, int, str]] = []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        content = strip_yaml_comment(raw)
+        if not content.strip():
+            continue
+        indent = len(content) - len(content.lstrip(" "))
+        lines.append((lineno, indent, content.strip()))
+    return lines
+
+
+def _collect_block_mapping(
+    lines: list[tuple[int, int, str]], start: int, parent_indent: int
+) -> tuple[dict[str, str], int]:
+    mapping: dict[str, str] = {}
+    idx = start
+    while idx < len(lines):
+        _lineno, indent, content = lines[idx]
+        if indent <= parent_indent:
+            break
+        if ":" not in content:
+            idx += 1
+            continue
+        key, _, rest = content.partition(":")
+        mapping[_unquote_scalar(key)] = _unquote_scalar(rest)
+        idx += 1
+    return mapping, idx
+
+
+def is_yaml_local_uses_key(content: str) -> bool:
+    """True when this YAML key is `uses: ./` (optional sequence dash)."""
+    stripped = content.strip()
+    if stripped.startswith("- "):
+        stripped = stripped[2:].strip()
+    if not stripped.startswith("uses:"):
+        return False
+    after = _unquote_scalar(stripped.split("uses:", 1)[1])
+    return after == "./" or after.startswith("./")
+
+
+def parse_workflow_permissions(text: str) -> dict:
+    """Extract top-level and job-level `permissions` plus local `uses: ./`.
+
+    Only `permissions:` at workflow indent 0, or as a direct job key
+    (same indent as `runs-on` / `steps`), is counted. Nested keys under
+    `steps` / `run` cannot grant Actions mutation. Comments are stripped
+    first.
+    """
+    lines = _iter_code_lines(text)
+    top_permissions: dict[str, str] | str | None = None
+    jobs: dict[str, dict] = {}
+    idx = 0
+    while idx < len(lines):
+        _lineno, indent, content = lines[idx]
+        if indent == 0 and content.startswith("permissions:"):
+            parsed = _parse_perm_rhs(content.split(":", 1)[1])
+            if parsed is None:
+                mapping, idx = _collect_block_mapping(lines, idx + 1, 0)
+                top_permissions = mapping
+            else:
+                top_permissions = parsed
+                idx += 1
+            continue
+        if indent == 0 and (content == "jobs:" or content.startswith("jobs:")):
+            idx += 1
+            job_indent: int | None = None
+            while idx < len(lines) and lines[idx][1] > 0:
+                j_lineno, j_indent, j_content = lines[idx]
+                if job_indent is None:
+                    job_indent = j_indent
+                if j_indent == job_indent:
+                    job_name = _unquote_scalar(j_content.split(":", 1)[0])
+                    job = {
+                        "permissions": None,
+                        "uses_local": False,
+                        "lineno": j_lineno,
+                    }
+                    jobs[job_name] = job
+                    idx += 1
+                    body_indent: int | None = None
+                    while idx < len(lines) and lines[idx][1] > job_indent:
+                        b_lineno, b_indent, b_content = lines[idx]
+                        if body_indent is None:
+                            body_indent = b_indent
+                        if b_indent == body_indent and b_content.startswith(
+                            "permissions:"
+                        ):
+                            parsed = _parse_perm_rhs(b_content.split(":", 1)[1])
+                            if parsed is None:
+                                mapping, idx = _collect_block_mapping(
+                                    lines, idx + 1, b_indent
+                                )
+                                job["permissions"] = mapping
+                            else:
+                                job["permissions"] = parsed
+                                idx += 1
+                            continue
+                        if is_yaml_local_uses_key(b_content):
+                            job["uses_local"] = True
+                        idx += 1
+                    continue
+                idx += 1
+            continue
+        idx += 1
+    return {
+        "top_permissions": top_permissions,
+        "jobs": jobs,
+        "has_local_uses": any(job["uses_local"] for job in jobs.values()),
+    }
+
+
+def grants_actions_write(perms: dict[str, str] | str | None) -> bool:
+    if perms is None:
+        return False
+    if isinstance(perms, str):
+        return perms.strip().lower() in {"write-all", "write"}
+    if isinstance(perms, dict):
+        for key, value in perms.items():
+            if str(key).strip().lower() == "actions" and str(value).strip().lower() == "write":
+                return True
+    return False
+
+
+def iter_gha_yaml_files() -> list[Path]:
+    files: list[Path] = []
+    for folder in (ROOT / ".github" / "workflows", ROOT / "examples"):
+        if folder.is_dir():
+            files.extend(sorted(folder.glob("*.yml")))
+            files.extend(sorted(folder.glob("*.yaml")))
+    return files
+
+
+def check_local_action_permissions(errors: list[str]) -> None:
+    """Reject Actions mutation on any workflow/job that `uses: ./`."""
+    for path in iter_gha_yaml_files():
+        rel = path.relative_to(ROOT).as_posix()
+        info = parse_workflow_permissions(path.read_text(encoding="utf-8"))
+        if info["has_local_uses"] and grants_actions_write(info["top_permissions"]):
+            errors.append(
+                f"{rel}: workflow with uses: ./ must not set top-level permissions.actions=write"
+            )
+        for name, job in info["jobs"].items():
+            if job["uses_local"] and grants_actions_write(job["permissions"]):
+                errors.append(
+                    f"{rel}: job {name!r} uses: ./ must not set permissions.actions=write"
+                )
+
+
 def main(argv: list[str] | None = None) -> int:
     del argv
     errors: list[str] = []
@@ -226,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
             check_external_uses(errors)
         except ValueError as exc:
             errors.append(str(exc))
+    check_local_action_permissions(errors)
     check_requirements_lock(errors)
     check_tree_digest(errors)
     if errors:

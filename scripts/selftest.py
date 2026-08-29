@@ -128,8 +128,25 @@ def main() -> int:
     print(f"run2 {hash2}")
     if hash1 != hash2:
         fail("report hashes differ")
-    (PROOF / "hashes.txt").write_text(f"{hash1}\n{hash2}\n", encoding="utf-8")
+    (PROOF / "hashes.txt").write_bytes(f"{hash1}\n{hash2}\n".encode("utf-8"))
     print("determinism: hashes identical")
+
+    stage = ROOT / "selftest-reports"
+    stage.mkdir(parents=True, exist_ok=True)
+    (stage / "official.json").write_bytes(official_1.read_bytes())
+    (stage / "mutants.json").write_bytes(mutants_path.read_bytes())
+    digest_entries: list[tuple[str, str]] = []
+    for kind in ("official", "mutants"):
+        for path in (ROOT / "testdata" / kind).glob("*.xml"):
+            rel = f"testdata/{kind}/{path.name}"
+            digest_entries.append((rel, sha256_file(path)))
+    digest_entries.sort(key=lambda item: item[0])
+    digest_text = "".join(f"{digest}  {rel}\n" for rel, digest in digest_entries)
+    (stage / "testdata.sha256").write_bytes(digest_text.encode("utf-8"))
+    for name in ("official.json", "mutants.json", "testdata.sha256"):
+        raw = (stage / name).read_bytes()
+        if b"\r" in raw:
+            fail(f"{name} contains CR")
 
     print("=== 4. unit tests ===")
     suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"), pattern="test_*.py")
