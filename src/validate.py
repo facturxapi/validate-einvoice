@@ -100,18 +100,21 @@ def gate_invoice_bytes(data: bytes, *, name: str = "input") -> None:
         raise ConfigError(f"XML is not well-formed ({name}): {exc}") from exc
 
 
+def refuse_invoice_dtd(path: Path, data: bytes | None = None) -> bytes:
+    """Read invoice bytes once, refuse any DOCTYPE, return the same bytes."""
+    if data is None:
+        data = path.read_bytes()
+    gate_invoice_bytes(data, name=path.name)
+    return data
+
+
 def gate_invoice_path(path: Path) -> str:
     """Parse immutable path bytes; refuse DOCTYPE; return sha256 of those bytes.
 
     Saxon must be given this same path afterwards. The file is not rewritten.
     """
-    data = path.read_bytes()
-    before = hashlib.sha256(data).hexdigest()
-    gate_invoice_bytes(data, name=path.name)
-    after = hashlib.sha256(path.read_bytes()).hexdigest()
-    if after != before:
-        raise EngineError(f"invoice bytes changed after DTD gate ({path.name})")
-    return before
+    data = refuse_invoice_dtd(path)
+    return hashlib.sha256(data).hexdigest()
 
 
 def sha256_file(path: Path) -> str:
@@ -527,7 +530,7 @@ def validate_files(
     annotations: list[str] = []
     try:
         for path in files:
-            gate_invoice_path(path)
+            data = refuse_invoice_dtd(path)
             resolved_syntax = resolve_syntax(path, syntax)
             xslt_info = xslt[resolved_syntax]
             svrl = engine.transform(path, Path(xslt_info["path"]))
@@ -538,7 +541,7 @@ def validate_files(
                 "failed_assert_count": len(failed),
                 "failed_assert_ids": ids,
                 "path": rel,
-                "sha256": sha256_file(path),
+                "sha256": hashlib.sha256(data).hexdigest(),
                 "syntax": resolved_syntax,
                 "verdict": "fail" if ids else "pass",
                 "xslt": xslt_info["logical"],
