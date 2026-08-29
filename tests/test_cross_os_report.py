@@ -175,6 +175,7 @@ class UserInvoiceNotNormalizedTests(unittest.TestCase):
         source = inspect.getsource(validate.validate_files)
         self.assertIn("data = refuse_invoice_dtd(path)", source)
         self.assertIn("hashlib.sha256(data).hexdigest()", source)
+        self.assertIn("transform_snapshot", source)
         self.assertNotIn("sha256_file(path)", source)
         self.assertNotIn("replace(b", source)
         self.assertNotIn("tostring", source)

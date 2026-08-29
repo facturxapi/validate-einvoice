@@ -154,8 +154,9 @@ canonical (`sort_keys`, no timestamps, relative paths). Two consecutive
 runs of the same files must produce the same `report-sha256`.
 
 Invoices that contain a DOCTYPE are refused before XSLT (stdlib expat).
-The invoice file is not rewritten; `files[].sha256` is the raw file
-bytes. See [`docs/LIMITS.md`](docs/LIMITS.md).
+User bytes are read once; `files[].sha256` is those raw bytes; Saxon
+transforms a private snapshot of the same bytes. See
+[`docs/LIMITS.md`](docs/LIMITS.md).
 
 `auto` maps:
 

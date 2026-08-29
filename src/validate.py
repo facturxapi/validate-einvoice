@@ -8,16 +8,19 @@ Never logs invoice bytes.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import glob
 import hashlib
+import io
 import json
 import os
 import re
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 import xml.parsers.expat
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 SUPPORTED_VERSION = "1.3.16"
 ENGINE_NAME = "SaxonC-HE 13.0"
@@ -109,12 +112,57 @@ def refuse_invoice_dtd(path: Path, data: bytes | None = None) -> bytes:
 
 
 def gate_invoice_path(path: Path) -> str:
-    """Parse immutable path bytes; refuse DOCTYPE; return sha256 of those bytes.
+    """Parse path bytes; refuse DOCTYPE; return sha256 of those bytes.
 
-    Saxon must be given this same path afterwards. The file is not rewritten.
+    The file is not rewritten. Callers that transform must hand Saxon a
+    private snapshot of these bytes, not this user path.
     """
     data = refuse_invoice_dtd(path)
     return hashlib.sha256(data).hexdigest()
+
+
+def _privatize_tmpdir(tmpdir: str) -> None:
+    """0o700 on POSIX; Windows mkdtemp is already under the user temp dir."""
+    if os.name != "nt":
+        os.chmod(tmpdir, 0o700)
+
+
+@contextlib.contextmanager
+def private_snapshot_file(data: bytes) -> Iterator[Path]:
+    """Write snapshot bytes to a private temp file; yield that path; always delete.
+
+    SaxonC 13 has no byte-backed source API (parse_xml xml_text is str only).
+    The original user path is never yielded. Bytes are copied as-is (no
+    decode, no re-serialize, LF/CRLF preserved).
+    """
+    tmpdir = tempfile.mkdtemp(prefix="ve-snap-")
+    snap = None
+    fd = None
+    try:
+        _privatize_tmpdir(tmpdir)
+        fd, snap = tempfile.mkstemp(prefix="inv-", suffix=".xml", dir=tmpdir)
+        view = memoryview(data)
+        offset = 0
+        while offset < len(data):
+            offset += os.write(fd, view[offset:])
+        os.close(fd)
+        fd = None
+        yield Path(snap)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if snap is not None:
+            try:
+                os.unlink(snap)
+            except OSError:
+                pass
+        try:
+            os.rmdir(tmpdir)
+        except OSError:
+            pass
 
 
 def sha256_file(path: Path) -> str:
@@ -200,10 +248,13 @@ def display_path(path: Path, cwd: Path | None = None) -> str:
         return path.name
 
 
-def detect_syntax(path: Path) -> str:
+def detect_syntax(path: Path, data: bytes | None = None) -> str:
+    """Detect CII/UBL from snapshot bytes. Does not re-read path when data is given."""
+    if data is None:
+        data = path.read_bytes()
     root_tag = None
     try:
-        for _event, elem in ET.iterparse(path, events=("start",)):
+        for _event, elem in ET.iterparse(io.BytesIO(data), events=("start",)):
             root_tag = elem.tag
             break
     except ET.ParseError as exc:
@@ -223,8 +274,8 @@ def detect_syntax(path: Path) -> str:
     )
 
 
-def resolve_syntax(path: Path, requested: str) -> str:
-    detected = detect_syntax(path)
+def resolve_syntax(path: Path, requested: str, data: bytes | None = None) -> str:
+    detected = detect_syntax(path, data=data)
     mode = requested.lower()
     if mode == "auto":
         return detected
@@ -340,7 +391,14 @@ class SaxonEngine:
         self._compiled: dict[str, Any] = {}
 
     def transform(self, xml_path: Path, xslt_path: Path) -> str:
-        gate_invoice_path(xml_path)
+        """Read the user path once, then transform a private snapshot of those bytes."""
+        data = xml_path.read_bytes()
+        gate_invoice_bytes(data, name=xml_path.name)
+        return self.transform_snapshot(data, xslt_path, name=xml_path.name)
+
+    def transform_snapshot(self, data: bytes, xslt_path: Path, *, name: str) -> str:
+        """Transform exactly these snapshot bytes. Never the original user path."""
+        gate_invoice_bytes(data, name=name)
         key = str(xslt_path)
         executable = self._compiled.get(key)
         if executable is None:
@@ -348,9 +406,10 @@ class SaxonEngine:
             if executable is None:
                 raise EngineError(f"XSLT compile failed: {xslt_path.name}")
             self._compiled[key] = executable
-        svrl = executable.transform_to_string(source_file=str(xml_path))
+        with private_snapshot_file(data) as snap:
+            svrl = executable.transform_to_string(source_file=str(snap))
         if svrl is None:
-            raise EngineError(f"XSLT produced no SVRL: {xml_path.name}")
+            raise EngineError(f"XSLT produced no SVRL: {name}")
         return svrl
 
     def close(self) -> None:
@@ -531,9 +590,11 @@ def validate_files(
     try:
         for path in files:
             data = refuse_invoice_dtd(path)
-            resolved_syntax = resolve_syntax(path, syntax)
+            resolved_syntax = resolve_syntax(path, syntax, data=data)
             xslt_info = xslt[resolved_syntax]
-            svrl = engine.transform(path, Path(xslt_info["path"]))
+            svrl = engine.transform_snapshot(
+                data, Path(xslt_info["path"]), name=path.name
+            )
             failed = parse_failed_asserts(svrl)
             ids = [item["id"] for item in failed]
             rel = display_path(path, cwd=cwd)

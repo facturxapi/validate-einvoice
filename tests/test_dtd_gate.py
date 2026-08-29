@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import http.server
 import inspect
@@ -131,7 +132,18 @@ class GateMechanismTests(unittest.TestCase):
         self.assertNotIn("iterparse", src)
         detect = inspect.getsource(validate.detect_syntax)
         self.assertIn("ET.iterparse", detect)
+        self.assertIn("io.BytesIO", detect)
         self.assertNotIn("StartDoctypeDeclHandler", detect)
+        snap_src = inspect.getsource(validate.SaxonEngine.transform_snapshot)
+        self.assertIn("private_snapshot_file", snap_src)
+        self.assertIn("source_file=str(snap)", snap_src)
+        self.assertNotIn("xml_path", snap_src)
+        t_src = inspect.getsource(validate.SaxonEngine.transform)
+        self.assertIn("transform_snapshot", t_src)
+        self.assertNotIn("source_file=", t_src)
+        vf_src = inspect.getsource(validate.validate_files)
+        self.assertIn("transform_snapshot", vf_src)
+        self.assertNotIn("engine.transform(path", vf_src)
 
     def test_b_allowed_protocols_is_file_not_empty(self) -> None:
         self.assertEqual(validate.SAXON_ALLOWED_PROTOCOLS_VALUE, "file")
@@ -419,6 +431,213 @@ class OfficialBytesAndCrlfTests(unittest.TestCase):
             engine.close()
         self.assertIn("schematron-output", svrl)
 
+
+
+
+class PrivateSnapshotFileTests(unittest.TestCase):
+    def test_snapshot_preserves_crlf_and_is_not_user_path(self) -> None:
+        data = b"<a>\r\n</a>\n"
+        lf = b"<a>\n</a>\n"
+        self.assertNotEqual(sha256_bytes(data), sha256_bytes(lf))
+        with tempfile.TemporaryDirectory() as tmp:
+            user = Path(tmp) / "user.xml"
+            user.write_bytes(data)
+            yielded: Path | None = None
+            with validate.private_snapshot_file(data) as snap:
+                yielded = snap
+                self.assertEqual(snap.read_bytes(), data)
+                self.assertNotEqual(snap.resolve(), user.resolve())
+                if os.name != "nt":
+                    mode = os.stat(snap.parent).st_mode & 0o777
+                    self.assertEqual(mode, 0o700)
+            assert yielded is not None
+            self.assertFalse(yielded.exists())
+            self.assertFalse(yielded.parent.exists())
+            self.assertEqual(user.read_bytes(), data)
+
+
+def anti_pattern_transform_user_path(
+    xml_path: Path,
+    xslt_path: Path,
+    *,
+    after_gate=None,
+) -> str:
+    """ANTI-PATTERN: gate the user path, then source_file= that same path.
+
+    Same-path is not same-bytes: a replace after the gate is visible to Saxon.
+    Production must transform a private snapshot instead. Kept as the
+    documented old design for the FAIL proof below.
+    """
+    validate.gate_invoice_path(xml_path)
+    if after_gate is not None:
+        after_gate(xml_path)
+    return current_saxon_dump(xml_path, xslt_path)
+
+
+@unittest.skipUnless(HAS_SAXON, "saxonche not installed")
+class SameBytesToctouTests(unittest.TestCase):
+    def setUp(self) -> None:
+        os.environ["EN16931_ACTION_ROOT"] = str(ROOT)
+
+    def test_old_design_consumes_replacement_fix_transforms_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            canary = base / "canary.txt"
+            canary.write_bytes((CANARY + "\n").encode("ascii"))
+            uri = canary.resolve().as_uri()
+            hostile = (
+                b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                + f'<!DOCTYPE foo [ <!ENTITY ext SYSTEM "{uri}"> ]>\n'.encode("ascii")
+                + b"<foo>&ext;</foo>\n"
+            )
+            mark = "BENIGN_SNAPSHOT_MARK"
+            benign = (
+                b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                + f"<foo>{mark}</foo>\n".encode("ascii")
+            )
+            xml_path = base / "invoice.xml"
+            xml_path.write_bytes(benign)
+            xslt_path = dump_xsl(base)
+
+            # Old design FAIL proof: last gate on original path, then replace.
+            self.assertIn("ANTI-PATTERN", anti_pattern_transform_user_path.__doc__ or "")
+            current_out = anti_pattern_transform_user_path(
+                xml_path,
+                xslt_path,
+                after_gate=lambda p: p.write_bytes(hostile),
+            )
+            if sys.platform.startswith("linux"):
+                self.assertIn(CANARY, current_out)
+            self.assertNotIn(mark, current_out)
+
+            # Restore canary + benign user file, then FIX path.
+            canary.write_bytes((CANARY + "\n").encode("ascii"))
+            xml_path.write_bytes(benign)
+            data = xml_path.read_bytes()
+            validate.gate_invoice_bytes(data, name=xml_path.name)
+            xml_path.write_bytes(hostile)
+            engine = validate.SaxonEngine()
+            try:
+                new_out = engine.transform_snapshot(
+                    data, xslt_path, name=xml_path.name
+                )
+            finally:
+                engine.close()
+            self.assertIn(mark, new_out)
+            self.assertNotIn(CANARY, new_out)
+            self.assertEqual(canary.read_bytes(), (CANARY + "\n").encode("ascii"))
+            self.assertEqual(xml_path.read_bytes(), hostile)
+
+    def test_validate_files_hook_after_gate_never_transforms_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            canary = base / "canary.txt"
+            canary.write_bytes((CANARY + "\n").encode("ascii"))
+            uri = canary.resolve().as_uri()
+            hostile = (
+                b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                + f'<!DOCTYPE foo [ <!ENTITY ext SYSTEM "{uri}"> ]>\n'.encode("ascii")
+                + b"<foo>&ext;</foo>\n"
+            )
+            benign = (ROOT / "testdata" / "official" / "CII_example3.xml").read_bytes()
+            self.assertNotIn(b"<!DOCTYPE", benign)
+            xml_path = base / "invoice.xml"
+            xml_path.write_bytes(benign)
+            before = sha256_bytes(benign)
+
+            original = validate.refuse_invoice_dtd
+
+            def refuse_then_replace(path: Path, data: bytes | None = None) -> bytes:
+                snapshot = original(path, data)
+                path.write_bytes(hostile)
+                return snapshot
+
+            validate.refuse_invoice_dtd = refuse_then_replace  # type: ignore[method-assign]
+            snap_paths: list[Path] = []
+            real_snap = validate.private_snapshot_file
+
+            @contextlib.contextmanager
+            def recording_snapshot(data: bytes):
+                with real_snap(data) as snap:
+                    snap_paths.append(snap.resolve())
+                    self.assertEqual(snap.read_bytes(), benign)
+                    self.assertEqual(xml_path.read_bytes(), hostile)
+                    yield snap
+
+            validate.private_snapshot_file = recording_snapshot  # type: ignore[method-assign]
+            try:
+                result = validate.validate_files(
+                    [xml_path],
+                    syntax="auto",
+                    fail_on_raw="failed-assert",
+                    version="1.3.16",
+                    root=ROOT,
+                    cwd=base,
+                )
+            finally:
+                validate.refuse_invoice_dtd = original
+                validate.private_snapshot_file = real_snap
+
+            row = result["payload"]["files"][0]
+            self.assertEqual(row["sha256"], before)
+            self.assertEqual(row["verdict"], "pass")
+            self.assertEqual(canary.read_bytes(), (CANARY + "\n").encode("ascii"))
+            self.assertEqual(xml_path.read_bytes(), hostile)
+            self.assertTrue(snap_paths)
+            for snap in snap_paths:
+                self.assertNotEqual(snap, xml_path.resolve())
+                self.assertFalse(snap.exists())
+
+    def test_validate_files_hook_http_zero_get(self) -> None:
+        httpd, hits = start_http()
+        try:
+            host, port = httpd.server_address[:2]
+            url = f"http://{host}:{port}/entity"
+            hostile = (
+                b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                + f'<!DOCTYPE foo [ <!ENTITY ext SYSTEM "{url}"> ]>\n'.encode("ascii")
+                + b"<foo>&ext;</foo>\n"
+            )
+            benign = (ROOT / "testdata" / "official" / "CII_example3.xml").read_bytes()
+            with tempfile.TemporaryDirectory() as tmp:
+                xml_path = Path(tmp) / "invoice.xml"
+                xml_path.write_bytes(benign)
+                original = validate.refuse_invoice_dtd
+
+                def refuse_then_replace(path: Path, data: bytes | None = None) -> bytes:
+                    snapshot = original(path, data)
+                    path.write_bytes(hostile)
+                    return snapshot
+
+                validate.refuse_invoice_dtd = refuse_then_replace  # type: ignore[method-assign]
+                try:
+                    result = validate.validate_files(
+                        [xml_path],
+                        syntax="auto",
+                        fail_on_raw="failed-assert",
+                        version="1.3.16",
+                        root=ROOT,
+                    )
+                finally:
+                    validate.refuse_invoice_dtd = original
+                self.assertEqual(hits, [])
+                self.assertEqual(
+                    result["payload"]["files"][0]["sha256"], sha256_bytes(benign)
+                )
+                self.assertEqual(result["payload"]["files"][0]["verdict"], "pass")
+        finally:
+            httpd.shutdown()
+
+
+class DetectSyntaxSnapshotTests(unittest.TestCase):
+    def test_detect_syntax_uses_passed_bytes_not_path(self) -> None:
+        cii = (ROOT / "testdata" / "official" / "CII_example1.xml").read_bytes()
+        ubl = (ROOT / "testdata" / "official" / "ubl-tc434-creditnote1.xml").read_bytes()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mixed.xml"
+            path.write_bytes(ubl)
+            self.assertEqual(validate.detect_syntax(path, data=cii), "CII")
+            self.assertEqual(validate.detect_syntax(path), "UBL")
 
 class FifoNotOpenedTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "named pipe is POSIX")

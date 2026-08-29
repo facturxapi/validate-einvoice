@@ -22,11 +22,13 @@ not a published maximum.
 ## DTD / protocol confine (C + B)
 
 C (mandatory): stdlib `xml.parsers.expat` `StartDoctypeDeclHandler` refuses
-any DOCTYPE before Saxon. The invoice file is not rewritten; Saxon
-`source_file=` uses the same path and the same bytes that passed the
-gate. `files[].sha256` is the SHA256 of those raw bytes. User invoices
-are not newline-normalized. `ET.iterparse` is syntax detection only; it
-is not this gate.
+any DOCTYPE before Saxon. User invoice bytes are read once into a snapshot.
+The gate, `files[].sha256`, syntax detection, and Saxon all use that same
+snapshot (no second read of the original path). SaxonC 13 has no byte-backed
+source API, so Saxon `source_file=` is a private temp copy of those bytes,
+never the original user path. The snapshot is not rewritten or
+newline-normalized. `ET.iterparse` is syntax detection only; it is not this
+gate.
 
 B (additional): SaxonC 13
 `set_configuration_property('http://saxon.sf.net/feature/allowedProtocols',
