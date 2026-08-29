@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""C gate: refuse any DOCTYPE before Saxon. Local-runnable, not Action globs."""
+"""C gate: stdlib expat fail-closed on DOCTYPE. B is extra HTTP block only."""
 
 from __future__ import annotations
 
 import hashlib
 import http.server
+import inspect
 import os
 import socketserver
+import subprocess
 import sys
 import tempfile
 import threading
@@ -20,282 +22,421 @@ if str(SRC) not in sys.path:
 
 import validate  # noqa: E402
 
-CII_MIN = (
-    '<?xml version="1.0" encoding="UTF-8"?>\n'
-    f'<rsm:CrossIndustryInvoice xmlns:rsm="{validate.CII_NS}">x'
-    "</rsm:CrossIndustryInvoice>\n"
-)
-CANARY_TOKEN = "CANARY_DTD_GATE_9f2c1a70"
+CANARY = "CANARY_DTD_GATE_TOKEN_7c1e9b42"
+
+try:
+    from saxonche import PySaxonProcessor
+
+    HAS_SAXON = True
+except ImportError:
+    HAS_SAXON = False
 
 
-class ReuseTCPServer(socketserver.TCPServer):
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
+    daemon_threads = True
 
 
-def _start_hit_server(hits: list[str]) -> tuple[ReuseTCPServer, str]:
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            hits.append(self.path)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/xml")
-            self.end_headers()
-            self.wfile.write(b"<!ELEMENT foo (#PCDATA)>\n")
+class HitHandler(http.server.BaseHTTPRequestHandler):
+    hits: list[str]
 
-        def log_message(self, *_args) -> None:
-            return None
+    def do_GET(self):
+        self.hits.append(self.path)
+        body = b"HTTP_PROBE_BODY_OK\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/xml")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
 
-    httpd = ReuseTCPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    host, port = httpd.server_address[:2]
-    return httpd, f"http://{host}:{port}"
-
-
-class FakeEngine:
-    def __init__(self) -> None:
-        self.calls: list[Path] = []
-
-    def transform(self, xml_path: Path, xslt_path: Path) -> str:
-        self.calls.append(Path(xml_path))
-        return '<svrl:schematron-output xmlns:svrl="http://purl.oclc.org/dsdl/svrl"/>'
-
-    def close(self) -> None:
+    def log_message(self, *args):
         return None
 
 
-def _run_validate(path: Path, engine: FakeEngine) -> dict:
-    tmp_root = path.parent
+def start_http() -> tuple[ThreadingHTTPServer, list[str]]:
+    hits: list[str] = []
 
-    def fake_load_xslt(root: Path, version: str) -> dict:
-        dummy = tmp_root / "dummy.xslt"
-        dummy.write_text("<xsl:stylesheet version='3.0' xmlns:xsl='http://www.w3.org/1999/XSL/Transform'/>\n")
-        return {
-            "CII": {"path": dummy, "sha256": "0", "logical": "dummy"},
-            "UBL": {"path": dummy, "sha256": "0", "logical": "dummy"},
-        }
+    class BoundHandler(HitHandler):
+        pass
 
-    orig_engine = validate.SaxonEngine
-    orig_load = validate.load_xslt
-    validate.SaxonEngine = lambda: engine  # type: ignore[misc, assignment]
-    validate.load_xslt = fake_load_xslt  # type: ignore[assignment]
-    try:
-        return validate.validate_files(
-            [path],
-            syntax="auto",
-            fail_on_raw="never",
-            version="1.3.16",
-            root=tmp_root,
-            cwd=tmp_root,
-        )
-    finally:
-        validate.SaxonEngine = orig_engine
-        validate.load_xslt = orig_load
+    BoundHandler.hits = hits
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), BoundHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd, hits
 
 
-class GateDoctypeTests(unittest.TestCase):
-    def test_no_dtd_parse_ok(self) -> None:
-        data = CII_MIN.encode("utf-8")
-        before = hashlib.sha256(data).hexdigest()
-        validate.gate_doctype(data)
-        self.assertEqual(hashlib.sha256(data).hexdigest(), before)
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
-    def test_internal_doctype_refused(self) -> None:
+
+def dump_xsl(dir_path: Path) -> Path:
+    path = dir_path / "dump.xsl"
+    path.write_bytes(
+        b"""<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="3.0">
+  <xsl:output method="text"/>
+  <xsl:template match="/"><xsl:value-of select="string(.)"/></xsl:template>
+</xsl:stylesheet>
+"""
+    )
+    return path
+
+
+def current_saxon_dump(xml_path: Path, xslt_path: Path) -> str:
+    """Unpatched SaxonC path: source_file= with no C gate and no B knob."""
+    proc = PySaxonProcessor(license=False)
+    xslt = proc.new_xslt30_processor()
+    executable = xslt.compile_stylesheet(stylesheet_file=str(xslt_path))
+    if executable is None:
+        raise RuntimeError("CURRENT compile failed")
+    out = executable.transform_to_string(source_file=str(xml_path))
+    closer = getattr(proc, "release", None)
+    if callable(closer):
+        closer()
+    return "" if out is None else out
+
+
+def current_saxon_dump_subprocess(
+    xml_path: Path, xslt_path: Path, *, timeout: float = 12.0
+) -> subprocess.CompletedProcess[str]:
+    """CURRENT Saxon in a child process so a hung HTTP fetch cannot stall tests."""
+    script = (
+        "from saxonche import PySaxonProcessor\n"
+        "import sys\n"
+        "xml_path, xslt_path = sys.argv[1], sys.argv[2]\n"
+        "proc = PySaxonProcessor(license=False)\n"
+        "xslt = proc.new_xslt30_processor()\n"
+        "exe = xslt.compile_stylesheet(stylesheet_file=xslt_path)\n"
+        "out = exe.transform_to_string(source_file=xml_path)\n"
+        "sys.stdout.write('' if out is None else out)\n"
+    )
+    return subprocess.run(
+        [sys.executable, "-c", script, str(xml_path), str(xslt_path)],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+class GateMechanismTests(unittest.TestCase):
+    def test_gate_is_expat_start_doctype_not_regex_or_iterparse(self) -> None:
+        src = inspect.getsource(validate.gate_invoice_bytes)
+        module = Path(validate.__file__).read_text(encoding="utf-8")
+        self.assertIn("StartDoctypeDeclHandler", src)
+        self.assertIn("xml.parsers.expat", module)
+        self.assertNotIn("re.search", src)
+        self.assertNotIn("re.match", src)
+        self.assertNotIn("iterparse", src)
+        detect = inspect.getsource(validate.detect_syntax)
+        self.assertIn("ET.iterparse", detect)
+        self.assertNotIn("StartDoctypeDeclHandler", detect)
+
+    def test_b_allowed_protocols_is_file_not_empty(self) -> None:
+        self.assertEqual(validate.SAXON_ALLOWED_PROTOCOLS_VALUE, "file")
+        self.assertNotEqual(validate.SAXON_ALLOWED_PROTOCOLS_VALUE, "")
+        src = inspect.getsource(validate.SaxonEngine.__init__)
+        self.assertIn("SAXON_ALLOWED_PROTOCOLS_FEATURE", src)
+        self.assertIn("SAXON_ALLOWED_PROTOCOLS_VALUE", src)
+        self.assertNotIn('""', src.split("set_configuration_property")[1][:400])
+
+
+class GateAdversarialTests(unittest.TestCase):
+    def test_no_dtd_control_parse_ok_bytes_unchanged(self) -> None:
+        data = b'<?xml version="1.0" encoding="UTF-8"?>\n<foo>NO_DTD_CONTROL</foo>\n'
+        before = sha256_bytes(data)
+        validate.gate_invoice_bytes(data, name="no-dtd.xml")
+        self.assertEqual(sha256_bytes(data), before)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "no-dtd.xml"
+            path.write_bytes(data)
+            digest = validate.gate_invoice_path(path)
+            self.assertEqual(digest, before)
+            self.assertEqual(sha256_bytes(path.read_bytes()), before)
+
+    def test_internal_doctype_refused_bytes_unchanged(self) -> None:
         data = (
             b'<?xml version="1.0" encoding="UTF-8"?>\n'
-            b'<!DOCTYPE foo [ <!ENTITY x "INTERNAL"> ]>\n'
+            b'<!DOCTYPE foo [ <!ENTITY x "INTERNAL_ENTITY_VALUE"> ]>\n'
             b"<foo>&x;</foo>\n"
         )
-        with self.assertRaises(validate.DtdRefused):
-            validate.gate_doctype(data)
+        before = sha256_bytes(data)
+        with self.assertRaises(validate.DtdRefused) as ctx:
+            validate.gate_invoice_bytes(data, name="internal-dtd.xml")
+        self.assertEqual(ctx.exception.doctype_name, "foo")
+        self.assertTrue(ctx.exception.has_internal_subset)
+        self.assertEqual(sha256_bytes(data), before)
+        self.assertNotIn(b"INTERNAL_ENTITY_VALUE", str(ctx.exception).encode("utf-8"))
 
-    def test_system_file_refused_without_reading_canary(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="dtd-file-") as td:
-            folder = Path(td)
-            canary = folder / "canary.txt"
-            canary.write_bytes(CANARY_TOKEN.encode("ascii"))
-            invoice = folder / "system-file.xml"
-            invoice.write_text(
-                '<?xml version="1.0" encoding="UTF-8"?>\n'
-                f'<!DOCTYPE foo [ <!ENTITY ext SYSTEM "{canary.as_uri()}"> ]>\n'
-                "<foo>&ext;</foo>\n",
-                encoding="utf-8",
-                newline="\n",
+    def test_system_file_refused_zero_canary_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            canary = base / "canary.txt"
+            canary.write_bytes((CANARY + "\n").encode("ascii"))
+            uri = canary.resolve().as_uri()
+            data = (
+                b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                + f'<!DOCTYPE foo [ <!ENTITY ext SYSTEM "{uri}"> ]>\n'.encode("ascii")
+                + b"<foo>&ext;</foo>\n"
             )
-            original_mode = canary.stat().st_mode
+            xml_path = base / "system-file.xml"
+            xml_path.write_bytes(data)
+            before = sha256_bytes(xml_path.read_bytes())
+            httpd, hits = start_http()
             try:
-                os.chmod(canary, 0)
-            except OSError:
-                pass
-            try:
-                with self.assertRaises(validate.ConfigError) as ctx:
-                    validate.refuse_invoice_dtd(invoice)
+                with self.assertRaises(validate.DtdRefused) as ctx:
+                    validate.gate_invoice_path(xml_path)
             finally:
-                try:
-                    os.chmod(canary, original_mode)
-                except OSError:
-                    pass
-            message = str(ctx.exception)
-            self.assertIn("DOCTYPE", message)
-            self.assertNotIn("well-formed", message)
-            self.assertEqual(canary.read_bytes().decode("ascii"), CANARY_TOKEN)
+                httpd.shutdown()
+            self.assertEqual(hits, [])
+            self.assertNotIn(CANARY, str(ctx.exception))
+            self.assertEqual(sha256_bytes(xml_path.read_bytes()), before)
+            self.assertEqual(canary.read_bytes(), (CANARY + "\n").encode("ascii"))
 
     def test_system_http_refused_zero_get(self) -> None:
-        hits: list[str] = []
-        httpd, base = _start_hit_server(hits)
+        httpd, hits = start_http()
         try:
+            host, port = httpd.server_address[:2]
+            url = f"http://{host}:{port}/entity"
             data = (
-                '<?xml version="1.0" encoding="UTF-8"?>\n'
-                f'<!DOCTYPE foo [ <!ENTITY ext SYSTEM "{base}/entity"> ]>\n'
-                "<foo>&ext;</foo>\n"
-            ).encode("utf-8")
+                b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                + f'<!DOCTYPE foo [ <!ENTITY ext SYSTEM "{url}"> ]>\n'.encode("ascii")
+                + b"<foo>&ext;</foo>\n"
+            )
+            before = sha256_bytes(data)
             with self.assertRaises(validate.DtdRefused):
-                validate.gate_doctype(data)
+                validate.gate_invoice_bytes(data, name="system-http.xml")
             self.assertEqual(hits, [])
+            self.assertEqual(sha256_bytes(data), before)
         finally:
             httpd.shutdown()
-            httpd.server_close()
 
-    def test_public_doctype_refused_zero_get(self) -> None:
-        hits: list[str] = []
-        httpd, base = _start_hit_server(hits)
+    def test_public_http_refused_zero_get(self) -> None:
+        httpd, hits = start_http()
         try:
+            host, port = httpd.server_address[:2]
+            url = f"http://{host}:{port}/public.dtd"
             data = (
-                '<?xml version="1.0" encoding="UTF-8"?>\n'
-                f'<!DOCTYPE foo PUBLIC "-//TEST//DTD Foo 1.0//EN" "{base}/public.dtd">\n'
-                "<foo>ok</foo>\n"
-            ).encode("utf-8")
-            with self.assertRaises(validate.DtdRefused):
-                validate.gate_doctype(data)
+                b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                + (
+                    f'<!DOCTYPE foo PUBLIC "-//GATE//DTD Foo 1.0//EN" "{url}">\n'
+                ).encode("ascii")
+                + b"<foo>ok</foo>\n"
+            )
+            with self.assertRaises(validate.DtdRefused) as ctx:
+                validate.gate_invoice_bytes(data, name="public-http.xml")
             self.assertEqual(hits, [])
+            self.assertEqual(ctx.exception.pubid, "-//GATE//DTD Foo 1.0//EN")
         finally:
             httpd.shutdown()
-            httpd.server_close()
 
-    def test_official_fixtures_have_no_doctype(self) -> None:
-        official = ROOT / "testdata" / "official"
-        mutants = ROOT / "testdata" / "mutants"
-        xml_files = sorted(official.glob("*.xml")) + sorted(mutants.glob("*.xml"))
-        if len(xml_files) != 20:
-            self.skipTest("official/mutant fixtures not present")
-        for path in xml_files:
-            raw = path.read_bytes()
-            validate.gate_doctype(raw)
-            self.assertNotIn(b"<!DOCTYPE", raw.upper())
-            self.assertNotIn(b"<!ENTITY", raw.upper())
-
-
-class ValidateFilesGateTests(unittest.TestCase):
-    def test_no_dtd_control_reaches_saxon_same_bytes(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="dtd-ok-") as td:
-            path = Path(td) / "control.xml"
-            payload = CII_MIN.encode("utf-8")
-            path.write_bytes(payload)
-            engine = FakeEngine()
-            result = _run_validate(path, engine)
-            self.assertEqual(len(engine.calls), 1)
-            self.assertEqual(engine.calls[0].resolve(), path.resolve())
-            self.assertEqual(
-                result["payload"]["files"][0]["sha256"],
-                hashlib.sha256(payload).hexdigest(),
+    def test_external_dtd_system_file_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dtd = Path(tmp) / "ext.dtd"
+            dtd.write_bytes(b"<!ELEMENT foo (#PCDATA)>\n")
+            uri = dtd.resolve().as_uri()
+            data = (
+                b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                + f'<!DOCTYPE foo SYSTEM "{uri}">\n'.encode("ascii")
+                + b"<foo>ok</foo>\n"
             )
-            self.assertEqual(path.read_bytes(), payload)
+            with self.assertRaises(validate.DtdRefused) as ctx:
+                validate.gate_invoice_bytes(data, name="external-dtd-file.xml")
+            self.assertFalse(ctx.exception.has_internal_subset)
+            self.assertIsNotNone(ctx.exception.sysid)
 
-    def test_internal_doctype_never_reaches_saxon(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="dtd-int-") as td:
-            path = Path(td) / "internal.xml"
-            path.write_text(
-                '<?xml version="1.0" encoding="UTF-8"?>\n'
-                '<!DOCTYPE rsm:CrossIndustryInvoice [ <!ENTITY x "INTERNAL"> ]>\n'
-                f'<rsm:CrossIndustryInvoice xmlns:rsm="{validate.CII_NS}">&x;'
-                "</rsm:CrossIndustryInvoice>\n",
-                encoding="utf-8",
-                newline="\n",
-            )
-            engine = FakeEngine()
-            with self.assertRaises(validate.ConfigError) as ctx:
-                _run_validate(path, engine)
-            self.assertIn("DOCTYPE", str(ctx.exception))
-            self.assertEqual(engine.calls, [])
+    def test_et_iterparse_is_not_the_gate(self) -> None:
+        data = (
+            b'<?xml version="1.0" encoding="UTF-8"?>\n'
+            b'<!DOCTYPE foo [ <!ENTITY x "INTERNAL_ENTITY_VALUE"> ]>\n'
+            b"<foo>&x;</foo>\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "internal-dtd.xml"
+            path.write_bytes(data)
+            import xml.etree.ElementTree as ET
 
-    def test_system_file_never_reads_canary_never_reaches_saxon(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="dtd-sysfile-") as td:
-            folder = Path(td)
-            canary = folder / "canary.txt"
-            canary.write_bytes(CANARY_TOKEN.encode("ascii"))
-            path = folder / "system-file.xml"
-            path.write_text(
-                '<?xml version="1.0" encoding="UTF-8"?>\n'
-                f'<!DOCTYPE rsm:CrossIndustryInvoice SYSTEM "{canary.as_uri()}">\n'
-                f'<rsm:CrossIndustryInvoice xmlns:rsm="{validate.CII_NS}">x'
-                "</rsm:CrossIndustryInvoice>\n",
-                encoding="utf-8",
-                newline="\n",
-            )
-            original_mode = canary.stat().st_mode
-            try:
-                os.chmod(canary, 0)
-            except OSError:
-                pass
-            engine = FakeEngine()
-            try:
-                with self.assertRaises(validate.ConfigError) as ctx:
-                    _run_validate(path, engine)
-            finally:
+            root_tag = None
+            for _event, elem in ET.iterparse(path, events=("start",)):
+                root_tag = elem.tag
+                break
+            self.assertEqual(root_tag, "foo")
+            with self.assertRaises(validate.DtdRefused):
+                validate.gate_invoice_path(path)
+
+
+@unittest.skipUnless(HAS_SAXON, "saxonche not installed")
+class BeforeAfterSaxonTests(unittest.TestCase):
+    def test_current_follows_system_http_after_c_zero_get(self) -> None:
+        httpd, hits = start_http()
+        try:
+            host, port = httpd.server_address[:2]
+            url = f"http://{host}:{port}/entity"
+            with tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                xml_path = base / "system-http.xml"
+                xml_path.write_bytes(
+                    b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                    + f'<!DOCTYPE foo [ <!ENTITY ext SYSTEM "{url}"> ]>\n'.encode(
+                        "ascii"
+                    )
+                    + b"<foo>&ext;</foo>\n"
+                )
+                xslt_path = dump_xsl(base)
+                hits.clear()
                 try:
-                    os.chmod(canary, original_mode)
-                except OSError:
+                    current_saxon_dump_subprocess(xml_path, xslt_path, timeout=12.0)
+                except subprocess.TimeoutExpired:
                     pass
-            self.assertIn("DOCTYPE", str(ctx.exception))
-            self.assertEqual(engine.calls, [])
-            self.assertEqual(canary.read_bytes().decode("ascii"), CANARY_TOKEN)
-
-    def test_system_http_zero_get_never_reaches_saxon(self) -> None:
-        hits: list[str] = []
-        httpd, base = _start_hit_server(hits)
-        try:
-            with tempfile.TemporaryDirectory(prefix="dtd-http-") as td:
-                path = Path(td) / "system-http.xml"
-                path.write_text(
-                    '<?xml version="1.0" encoding="UTF-8"?>\n'
-                    f'<!DOCTYPE rsm:CrossIndustryInvoice SYSTEM "{base}/entity">\n'
-                    f'<rsm:CrossIndustryInvoice xmlns:rsm="{validate.CII_NS}">x'
-                    "</rsm:CrossIndustryInvoice>\n",
-                    encoding="utf-8",
-                    newline="\n",
-                )
-                engine = FakeEngine()
-                with self.assertRaises(validate.ConfigError) as ctx:
-                    _run_validate(path, engine)
-                self.assertIn("DOCTYPE", str(ctx.exception))
-                self.assertEqual(engine.calls, [])
+                if sys.platform.startswith("linux"):
+                    self.assertTrue(hits, msg="CURRENT must follow SYSTEM HTTP")
+                hits.clear()
+                with self.assertRaises(validate.DtdRefused):
+                    validate.gate_invoice_path(xml_path)
+                self.assertEqual(hits, [])
+                hits.clear()
+                with self.assertRaises(validate.DtdRefused):
+                    engine = validate.SaxonEngine()
+                    try:
+                        engine.transform(xml_path, xslt_path)
+                    finally:
+                        engine.close()
                 self.assertEqual(hits, [])
         finally:
             httpd.shutdown()
-            httpd.server_close()
 
-    def test_public_zero_get_never_reaches_saxon(self) -> None:
-        hits: list[str] = []
-        httpd, base = _start_hit_server(hits)
+    def test_current_follows_system_file_after_c_no_canary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            canary = base / "canary.txt"
+            canary.write_bytes((CANARY + "\n").encode("ascii"))
+            uri = canary.resolve().as_uri()
+            xml_path = base / "system-file.xml"
+            xml_path.write_bytes(
+                b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                + f'<!DOCTYPE foo [ <!ENTITY ext SYSTEM "{uri}"> ]>\n'.encode("ascii")
+                + b"<foo>&ext;</foo>\n"
+            )
+            xslt_path = dump_xsl(base)
+            current_out = current_saxon_dump(xml_path, xslt_path)
+            if sys.platform.startswith("linux"):
+                self.assertIn(CANARY, current_out)
+            with self.assertRaises(validate.DtdRefused) as ctx:
+                validate.gate_invoice_path(xml_path)
+            self.assertNotIn(CANARY, str(ctx.exception))
+            with self.assertRaises(validate.DtdRefused):
+                engine = validate.SaxonEngine()
+                try:
+                    engine.transform(xml_path, xslt_path)
+                finally:
+                    engine.close()
+
+
+@unittest.skipUnless(HAS_SAXON, "saxonche not installed")
+class OfficialBytesAndCrlfTests(unittest.TestCase):
+    def setUp(self) -> None:
+        os.environ["EN16931_ACTION_ROOT"] = str(ROOT)
+
+    def test_official_file_same_sha_before_after_gate_and_report(self) -> None:
+        path = ROOT / "testdata" / "official" / "CII_example3.xml"
+        before = sha256_bytes(path.read_bytes())
+        digest = validate.gate_invoice_path(path)
+        after = sha256_bytes(path.read_bytes())
+        self.assertEqual(digest, before)
+        self.assertEqual(after, before)
+        result = validate.validate_files(
+            [path],
+            syntax="auto",
+            fail_on_raw="failed-assert",
+            version="1.3.16",
+            root=ROOT,
+            cwd=ROOT,
+        )
+        row = result["payload"]["files"][0]
+        self.assertEqual(row["sha256"], before)
+        self.assertEqual(row["sha256"], validate.sha256_file(path))
+        self.assertEqual(row["verdict"], "pass")
+
+    def test_crlf_user_invoice_hashed_as_crlf(self) -> None:
+        raw = (ROOT / "testdata" / "official" / "CII_example3.xml").read_bytes()
+        self.assertNotIn(b"\r", raw)
+        crlf = raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        self.assertIn(b"\r\n", crlf)
+        self.assertNotEqual(sha256_bytes(raw), sha256_bytes(crlf))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "user-crlf.xml"
+            path.write_bytes(crlf)
+            self.assertEqual(validate.sha256_file(path), sha256_bytes(crlf))
+            digest = validate.gate_invoice_path(path)
+            self.assertEqual(digest, sha256_bytes(crlf))
+            self.assertEqual(sha256_bytes(path.read_bytes()), sha256_bytes(crlf))
+            result = validate.validate_files(
+                [path],
+                syntax="auto",
+                fail_on_raw="failed-assert",
+                version="1.3.16",
+                root=ROOT,
+                cwd=Path(tmp),
+            )
+            row = result["payload"]["files"][0]
+            self.assertEqual(row["sha256"], sha256_bytes(crlf))
+            self.assertNotEqual(row["sha256"], sha256_bytes(raw))
+
+    def test_validate_files_refuses_doctype_before_saxon(self) -> None:
+        httpd, hits = start_http()
         try:
-            with tempfile.TemporaryDirectory(prefix="dtd-pub-") as td:
-                path = Path(td) / "public.xml"
-                path.write_text(
-                    '<?xml version="1.0" encoding="UTF-8"?>\n'
-                    f'<!DOCTYPE rsm:CrossIndustryInvoice PUBLIC "-//TEST//DTD 1.0//EN" "{base}/public.dtd">\n'
-                    f'<rsm:CrossIndustryInvoice xmlns:rsm="{validate.CII_NS}">x'
-                    "</rsm:CrossIndustryInvoice>\n",
-                    encoding="utf-8",
-                    newline="\n",
+            host, port = httpd.server_address[:2]
+            url = f"http://{host}:{port}/entity"
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "hostile.xml"
+                path.write_bytes(
+                    b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                    + f'<!DOCTYPE foo [ <!ENTITY ext SYSTEM "{url}"> ]>\n'.encode(
+                        "ascii"
+                    )
+                    + b"<foo>&ext;</foo>\n"
                 )
-                engine = FakeEngine()
-                with self.assertRaises(validate.ConfigError) as ctx:
-                    _run_validate(path, engine)
-                self.assertIn("DOCTYPE", str(ctx.exception))
-                self.assertEqual(engine.calls, [])
+                with self.assertRaises(validate.DtdRefused):
+                    validate.validate_files(
+                        [path],
+                        syntax="auto",
+                        fail_on_raw="failed-assert",
+                        version="1.3.16",
+                        root=ROOT,
+                    )
                 self.assertEqual(hits, [])
         finally:
             httpd.shutdown()
-            httpd.server_close()
+
+    def test_b_does_not_break_stylesheet_file_and_source_file(self) -> None:
+        path = ROOT / "testdata" / "official" / "CII_example3.xml"
+        engine = validate.SaxonEngine()
+        try:
+            xslt = ROOT / validate.CII_XSLT_REL
+            svrl = engine.transform(path, xslt)
+        finally:
+            engine.close()
+        self.assertIn("schematron-output", svrl)
+
+
+class FifoNotOpenedTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "named pipe is POSIX")
+    def test_system_fifo_not_opened(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            fifo = base / "canary.fifo"
+            os.mkfifo(fifo)
+            uri = fifo.resolve().as_uri()
+            data = (
+                b'<?xml version="1.0" encoding="UTF-8"?>\n'
+                + f'<!DOCTYPE foo [ <!ENTITY ext SYSTEM "{uri}"> ]>\n'.encode("ascii")
+                + b"<foo>&ext;</foo>\n"
+            )
+            xml_path = base / "system-fifo.xml"
+            xml_path.write_bytes(data)
+            with self.assertRaises(validate.DtdRefused):
+                validate.gate_invoice_path(xml_path)
 
 
 if __name__ == "__main__":

@@ -23,7 +23,11 @@ SUPPORTED_VERSION = "1.3.16"
 ENGINE_NAME = "SaxonC-HE 13.0"
 ENGINE_PKG_PIN = "saxonche==13.0.0"
 ENGINE_PKG_PREFIX = "13.0"
-ALLOWED_PROTOCOLS_FEATURE = "http://saxon.sf.net/feature/allowedProtocols"
+
+# B additional: extra HTTP block on SaxonC 13. Does not replace C.
+# Empty string must not be used — it breaks stylesheet_file= and source_file=.
+SAXON_ALLOWED_PROTOCOLS_FEATURE = "http://saxon.sf.net/feature/allowedProtocols"
+SAXON_ALLOWED_PROTOCOLS_VALUE = "file"
 
 CII_NS = "urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
 UBL_INVOICE_NS = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
@@ -56,53 +60,58 @@ class EngineError(Exception):
     """XSLT engine error (exit 2)."""
 
 
-class DtdRefused(Exception):
-    """Any DOCTYPE is refused before external resolution."""
+class DtdRefused(ConfigError):
+    """Any DOCTYPE is refused before the XSLT engine sees the file."""
 
     def __init__(
         self,
-        doctype_name: str | None,
-        sysid: str | None,
-        pubid: str | None,
+        name: str,
+        doctype_name: object,
+        sysid: object,
+        pubid: object,
         has_internal_subset: bool,
     ) -> None:
         self.doctype_name = doctype_name
         self.sysid = sysid
         self.pubid = pubid
         self.has_internal_subset = has_internal_subset
-        super().__init__(
-            f"DOCTYPE is not allowed (name={doctype_name!r} "
-            f"sysid={sysid!r} pubid={pubid!r})"
-        )
+        super().__init__(f"DOCTYPE is not allowed ({name})")
 
 
-def gate_doctype(data: bytes) -> None:
-    """Fail-closed on any DOCTYPE. Does not resolve file or HTTP entities.
+def gate_invoice_bytes(data: bytes, *, name: str = "input") -> None:
+    """Fail-closed on any DOCTYPE via stdlib expat. Does not rewrite bytes.
 
-    Default expat plus StartDoctypeDeclHandler; abort on first DOCTYPE.
-    No ExternalEntityRefHandler (would change resolution behaviour).
+    ``StartDoctypeDeclHandler`` is the gate. This is not a regex scan.
+    ElementTree syntax detection is a separate step, not this gate.
     """
     parser = xml.parsers.expat.ParserCreate()
 
     def start_doctype(doctype_name, sysid, pubid, has_internal_subset):
-        raise DtdRefused(doctype_name, sysid, pubid, bool(has_internal_subset))
+        raise DtdRefused(
+            name, doctype_name, sysid, pubid, bool(has_internal_subset)
+        )
 
     parser.StartDoctypeDeclHandler = start_doctype
-    parser.Parse(data, True)
-
-
-def refuse_invoice_dtd(path: Path, data: bytes | None = None) -> bytes:
-    """Read invoice bytes once, refuse any DOCTYPE, return the same bytes."""
-    if data is None:
-        data = path.read_bytes()
     try:
-        gate_doctype(data)
-    except DtdRefused as exc:
-        raise ConfigError(f"XML DTD/DOCTYPE is not allowed ({path.name})") from exc
+        parser.Parse(data, True)
+    except DtdRefused:
+        raise
     except xml.parsers.expat.ExpatError as exc:
-        raise ConfigError(f"XML is not well-formed ({path.name}): {exc}") from exc
-    return data
+        raise ConfigError(f"XML is not well-formed ({name}): {exc}") from exc
 
+
+def gate_invoice_path(path: Path) -> str:
+    """Parse immutable path bytes; refuse DOCTYPE; return sha256 of those bytes.
+
+    Saxon must be given this same path afterwards. The file is not rewritten.
+    """
+    data = path.read_bytes()
+    before = hashlib.sha256(data).hexdigest()
+    gate_invoice_bytes(data, name=path.name)
+    after = hashlib.sha256(path.read_bytes()).hexdigest()
+    if after != before:
+        raise EngineError(f"invoice bytes changed after DTD gate ({path.name})")
+    return before
 
 
 def sha256_file(path: Path) -> str:
@@ -315,17 +324,20 @@ class SaxonEngine:
                 f"Install {ENGINE_PKG_PIN}."
             ) from exc
         self._proc = PySaxonProcessor(license=False)
-        try:
-            # B additional: HTTP-only extra. Never empty (breaks stylesheet_file=).
-            # Does not block file SYSTEM; C covers that. B never replaces C.
-            self._proc.set_configuration_property(ALLOWED_PROTOCOLS_FEATURE, "file")
-        except Exception:
-            pass
+        if SAXON_ALLOWED_PROTOCOLS_VALUE != "file":
+            raise ConfigError(
+                "Saxon allowedProtocols must be 'file' "
+                "(empty string breaks file: XSLT)"
+            )
+        self._proc.set_configuration_property(
+            SAXON_ALLOWED_PROTOCOLS_FEATURE,
+            SAXON_ALLOWED_PROTOCOLS_VALUE,
+        )
         self._xslt = self._proc.new_xslt30_processor()
         self._compiled: dict[str, Any] = {}
 
     def transform(self, xml_path: Path, xslt_path: Path) -> str:
-        refuse_invoice_dtd(xml_path)
+        gate_invoice_path(xml_path)
         key = str(xslt_path)
         executable = self._compiled.get(key)
         if executable is None:
@@ -515,7 +527,7 @@ def validate_files(
     annotations: list[str] = []
     try:
         for path in files:
-            data = refuse_invoice_dtd(path)
+            gate_invoice_path(path)
             resolved_syntax = resolve_syntax(path, syntax)
             xslt_info = xslt[resolved_syntax]
             svrl = engine.transform(path, Path(xslt_info["path"]))
@@ -526,7 +538,7 @@ def validate_files(
                 "failed_assert_count": len(failed),
                 "failed_assert_ids": ids,
                 "path": rel,
-                "sha256": hashlib.sha256(data).hexdigest(),
+                "sha256": sha256_file(path),
                 "syntax": resolved_syntax,
                 "verdict": "fail" if ids else "pass",
                 "xslt": xslt_info["logical"],

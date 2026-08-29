@@ -21,16 +21,18 @@ not a published maximum.
 
 ## DTD / protocol confine (C + B)
 
-C (required): stdlib `xml.parsers.expat` `StartDoctypeDeclHandler` refuses
-any DOCTYPE before Saxon. Invoice bytes are not rewritten; Saxon uses
-`source_file=` on the same path. `files[].sha256` is the hash of those
-raw bytes.
+C (mandatory): stdlib `xml.parsers.expat` `StartDoctypeDeclHandler` refuses
+any DOCTYPE before Saxon. The invoice file is not rewritten; Saxon
+`source_file=` uses the same path and the same bytes that passed the
+gate. `files[].sha256` is the SHA256 of those raw bytes. User invoices
+are not newline-normalized. `ET.iterparse` is syntax detection only; it
+is not this gate.
 
-B (additional): after `PySaxonProcessor`, `allowedProtocols=file` (never
-empty: that breaks `stylesheet_file=`). Linux-measured HTTP-only extra.
-B does not block `file://` SYSTEM; C covers that. No portable knob
-blocks both HTTP and file SYSTEM without breaking XSLT load. B never
-replaces C.
+B (additional): SaxonC 13
+`set_configuration_property('http://saxon.sf.net/feature/allowedProtocols',
+'file')` blocks HTTP/HTTPS as an extra control. It does not replace C
+(`file:` SYSTEM still needs C). Empty `allowedProtocols` is not used:
+it breaks `stylesheet_file=` and `source_file=`.
 
 ## Annotation text
 
