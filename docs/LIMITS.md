@@ -45,3 +45,10 @@ LF endings; they are written as bytes so Windows cannot inject CR LF.
 `timeout-minutes` is 20 on Self-test jobs, 15 on `selftest-gate`, and 15
 on Supply-chain and upstream-drift jobs. Those bound the runner job, not
 invoice size.
+
+## CI token (GITHUB_TOKEN)
+
+The Self-test workflow grants `contents: read` only. Same-run
+`upload-artifact` / `download-artifact` do not take a token with
+`actions: write` / `actions: read`. Jobs that `uses: ./` must not
+hold Actions mutation rights.
