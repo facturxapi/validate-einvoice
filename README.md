@@ -153,6 +153,11 @@ Engine pin: `saxonche==13.0.0` (SaxonC-HE 13.0). The JSON report is
 canonical (`sort_keys`, no timestamps, relative paths). Two consecutive
 runs of the same files must produce the same `report-sha256`.
 
+Invoices that contain a DOCTYPE are refused before XSLT (stdlib expat).
+User bytes are read once; `files[].sha256` is those raw bytes; Saxon
+transforms a private snapshot of the same bytes. See
+[`docs/LIMITS.md`](docs/LIMITS.md).
+
 `auto` maps:
 
 - `urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100` → CII

@@ -19,7 +19,28 @@ not a published maximum.
 | `jdk.xml.maxElementDepth` | 100 |
 | `jdk.xml.entityExpansionLimit` | 2500 |
 
-This change does not alter entity or URI resolution.
+## DTD / protocol confine (C + B)
+
+C (mandatory): stdlib `xml.parsers.expat` `StartDoctypeDeclHandler` refuses
+any DOCTYPE before Saxon. User invoice bytes are read once into a snapshot.
+The gate, `files[].sha256`, syntax detection, and Saxon all use that same
+snapshot (no second read of the original path). SaxonC 13 has no byte-backed
+source API, so Saxon `source_file=` is a private temp copy of those bytes,
+never the original user path. The snapshot is not rewritten or
+newline-normalized. After `transform_to_string` returns, processor refs
+that can pin the snapshot are dropped (`gc.collect`, and `engine.close`
+drops the compiled cache and processor). Cleanup then unlinks the snapshot
+file, then removes the private directory, with bounded retry. Both paths
+are checked with `Path.exists()`. If either remains, the engine raises and
+does **not** return a successful validation result. That error does not
+include the temp path or invoice bytes. `ET.iterparse` is syntax detection
+only; it is not this gate.
+
+B (additional): SaxonC 13
+`set_configuration_property('http://saxon.sf.net/feature/allowedProtocols',
+'file')` blocks HTTP/HTTPS as an extra control. It does not replace C
+(`file:` SYSTEM still needs C). Empty `allowedProtocols` is not used:
+it breaks `stylesheet_file=` and `source_file=`.
 
 ## Annotation text
 

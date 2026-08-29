@@ -8,20 +8,32 @@ Never logs invoice bytes.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import gc
 import glob
 import hashlib
+import io
 import json
 import os
 import re
 import sys
+import tempfile
+import time
 import xml.etree.ElementTree as ET
+import xml.parsers.expat
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 SUPPORTED_VERSION = "1.3.16"
 ENGINE_NAME = "SaxonC-HE 13.0"
 ENGINE_PKG_PIN = "saxonche==13.0.0"
 ENGINE_PKG_PREFIX = "13.0"
+
+# B additional: extra HTTP block on SaxonC 13. Does not replace C.
+# Empty string must not be used — it breaks stylesheet_file= and source_file=.
+SAXON_ALLOWED_PROTOCOLS_FEATURE = "http://saxon.sf.net/feature/allowedProtocols"
+SAXON_ALLOWED_PROTOCOLS_VALUE = "file"
 
 CII_NS = "urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
 UBL_INVOICE_NS = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
@@ -52,6 +64,210 @@ class ConfigError(Exception):
 
 class EngineError(Exception):
     """XSLT engine error (exit 2)."""
+
+
+class SnapshotCleanupError(EngineError):
+    """Private snapshot residue after transform (exit 2).
+
+    Message is generic: no temp path, no invoice bytes.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("private invoice snapshot could not be removed")
+
+
+class DtdRefused(ConfigError):
+    """Any DOCTYPE is refused before the XSLT engine sees the file."""
+
+    def __init__(
+        self,
+        name: str,
+        doctype_name: object,
+        sysid: object,
+        pubid: object,
+        has_internal_subset: bool,
+    ) -> None:
+        self.doctype_name = doctype_name
+        self.sysid = sysid
+        self.pubid = pubid
+        self.has_internal_subset = has_internal_subset
+        super().__init__(f"DOCTYPE is not allowed ({name})")
+
+
+def gate_invoice_bytes(data: bytes, *, name: str = "input") -> None:
+    """Fail-closed on any DOCTYPE via stdlib expat. Does not rewrite bytes.
+
+    ``StartDoctypeDeclHandler`` is the gate. This is not a regex scan.
+    ElementTree syntax detection is a separate step, not this gate.
+    """
+    parser = xml.parsers.expat.ParserCreate()
+
+    def start_doctype(doctype_name, sysid, pubid, has_internal_subset):
+        raise DtdRefused(
+            name, doctype_name, sysid, pubid, bool(has_internal_subset)
+        )
+
+    parser.StartDoctypeDeclHandler = start_doctype
+    try:
+        parser.Parse(data, True)
+    except DtdRefused:
+        raise
+    except xml.parsers.expat.ExpatError as exc:
+        raise ConfigError(f"XML is not well-formed ({name}): {exc}") from exc
+
+
+def refuse_invoice_dtd(path: Path, data: bytes | None = None) -> bytes:
+    """Read invoice bytes once, refuse any DOCTYPE, return the same bytes."""
+    if data is None:
+        data = path.read_bytes()
+    gate_invoice_bytes(data, name=path.name)
+    return data
+
+
+def gate_invoice_path(path: Path) -> str:
+    """Parse path bytes; refuse DOCTYPE; return sha256 of those bytes.
+
+    The file is not rewritten. Callers that transform must hand Saxon a
+    private snapshot of these bytes, not this user path.
+    """
+    data = refuse_invoice_dtd(path)
+    return hashlib.sha256(data).hexdigest()
+
+
+def _privatize_tmpdir(tmpdir: str) -> None:
+    """0o700 on POSIX; Windows mkdtemp is already under the user temp dir."""
+    if os.name != "nt":
+        os.chmod(tmpdir, 0o700)
+
+
+SNAPSHOT_CLEANUP_ATTEMPTS = 8
+SNAPSHOT_CLEANUP_DELAY_SEC = 0.05
+
+
+def snapshot_cleanup_sleep(seconds: float) -> None:
+    """Sleep hook for snapshot cleanup retry. Tests replace this with a no-op."""
+    if seconds:
+        time.sleep(seconds)
+
+
+def remove_with_retry(
+    path: str,
+    *,
+    remover: Callable[[str], None],
+    attempts: int = SNAPSHOT_CLEANUP_ATTEMPTS,
+    delay: float = SNAPSHOT_CLEANUP_DELAY_SEC,
+    sleeper: Callable[[float], None] | None = None,
+) -> None:
+    """Bounded remove. Tests pass attempts and a 0-delay sleeper."""
+    if sleeper is None:
+        sleeper = snapshot_cleanup_sleep
+    n = max(1, int(attempts))
+    for i in range(n):
+        try:
+            remover(path)
+        except FileNotFoundError:
+            return
+        except OSError:
+            pass
+        if not Path(path).exists():
+            return
+        if i + 1 < n:
+            sleeper(delay)
+
+
+def cleanup_private_snapshot(
+    snap: str | None,
+    tmpdir: str,
+    *,
+    attempts: int | None = None,
+    delay: float | None = None,
+    sleeper: Callable[[float], None] | None = None,
+    unlinker: Callable[[str], None] | None = None,
+    rmdirer: Callable[[str], None] | None = None,
+) -> None:
+    """Unlink snapshot file, then rmdir private directory, then verify both gone.
+
+    Raises SnapshotCleanupError on residue. Message has no path and no
+    invoice bytes.
+    """
+    if attempts is None:
+        attempts = SNAPSHOT_CLEANUP_ATTEMPTS
+    if delay is None:
+        delay = SNAPSHOT_CLEANUP_DELAY_SEC
+    if unlinker is None:
+        unlinker = os.unlink
+    if rmdirer is None:
+        rmdirer = os.rmdir
+    if snap is not None:
+        remove_with_retry(
+            snap,
+            remover=unlinker,
+            attempts=attempts,
+            delay=delay,
+            sleeper=sleeper,
+        )
+    remove_with_retry(
+        tmpdir,
+        remover=rmdirer,
+        attempts=attempts,
+        delay=delay,
+        sleeper=sleeper,
+    )
+    snap_left = snap is not None and Path(snap).exists()
+    dir_left = Path(tmpdir).exists()
+    if snap_left or dir_left:
+        raise SnapshotCleanupError()
+
+
+@contextlib.contextmanager
+def private_snapshot_file(
+    data: bytes,
+    *,
+    attempts: int | None = None,
+    delay: float | None = None,
+    sleeper: Callable[[float], None] | None = None,
+    unlinker: Callable[[str], None] | None = None,
+    rmdirer: Callable[[str], None] | None = None,
+) -> Iterator[Path]:
+    """Write snapshot bytes to a private temp file; yield that path.
+
+    SaxonC 13 has no byte-backed source API (parse_xml xml_text is str only).
+    The original user path is never yielded. Bytes are copied as-is (no
+    decode, no re-serialize, LF/CRLF preserved).
+
+    After the caller finishes (Saxon must have returned from
+    transform_to_string and dropped snapshot handles), cleanup unlinks the
+    file, then removes the directory, with bounded retry. Both paths are
+    then checked with Path.exists(). Residue raises SnapshotCleanupError.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="ve-snap-")
+    snap = None
+    fd = None
+    try:
+        _privatize_tmpdir(tmpdir)
+        fd, snap = tempfile.mkstemp(prefix="inv-", suffix=".xml", dir=tmpdir)
+        view = memoryview(data)
+        offset = 0
+        while offset < len(data):
+            offset += os.write(fd, view[offset:])
+        os.close(fd)
+        fd = None
+        yield Path(snap)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        cleanup_private_snapshot(
+            snap,
+            tmpdir,
+            attempts=attempts,
+            delay=delay,
+            sleeper=sleeper,
+            unlinker=unlinker,
+            rmdirer=rmdirer,
+        )
 
 
 def sha256_file(path: Path) -> str:
@@ -137,10 +353,13 @@ def display_path(path: Path, cwd: Path | None = None) -> str:
         return path.name
 
 
-def detect_syntax(path: Path) -> str:
+def detect_syntax(path: Path, data: bytes | None = None) -> str:
+    """Detect CII/UBL from snapshot bytes. Does not re-read path when data is given."""
+    if data is None:
+        data = path.read_bytes()
     root_tag = None
     try:
-        for _event, elem in ET.iterparse(path, events=("start",)):
+        for _event, elem in ET.iterparse(io.BytesIO(data), events=("start",)):
             root_tag = elem.tag
             break
     except ET.ParseError as exc:
@@ -160,8 +379,8 @@ def detect_syntax(path: Path) -> str:
     )
 
 
-def resolve_syntax(path: Path, requested: str) -> str:
-    detected = detect_syntax(path)
+def resolve_syntax(path: Path, requested: str, data: bytes | None = None) -> str:
+    detected = detect_syntax(path, data=data)
     mode = requested.lower()
     if mode == "auto":
         return detected
@@ -264,10 +483,27 @@ class SaxonEngine:
                 f"Install {ENGINE_PKG_PIN}."
             ) from exc
         self._proc = PySaxonProcessor(license=False)
+        if SAXON_ALLOWED_PROTOCOLS_VALUE != "file":
+            raise ConfigError(
+                "Saxon allowedProtocols must be 'file' "
+                "(empty string breaks file: XSLT)"
+            )
+        self._proc.set_configuration_property(
+            SAXON_ALLOWED_PROTOCOLS_FEATURE,
+            SAXON_ALLOWED_PROTOCOLS_VALUE,
+        )
         self._xslt = self._proc.new_xslt30_processor()
         self._compiled: dict[str, Any] = {}
 
     def transform(self, xml_path: Path, xslt_path: Path) -> str:
+        """Read the user path once, then transform a private snapshot of those bytes."""
+        data = xml_path.read_bytes()
+        gate_invoice_bytes(data, name=xml_path.name)
+        return self.transform_snapshot(data, xslt_path, name=xml_path.name)
+
+    def transform_snapshot(self, data: bytes, xslt_path: Path, *, name: str) -> str:
+        """Transform exactly these snapshot bytes. Never the original user path."""
+        gate_invoice_bytes(data, name=name)
         key = str(xslt_path)
         executable = self._compiled.get(key)
         if executable is None:
@@ -275,15 +511,31 @@ class SaxonEngine:
             if executable is None:
                 raise EngineError(f"XSLT compile failed: {xslt_path.name}")
             self._compiled[key] = executable
-        svrl = executable.transform_to_string(source_file=str(xml_path))
+        svrl = None
+        with private_snapshot_file(data) as snap:
+            try:
+                svrl = executable.transform_to_string(source_file=str(snap))
+            finally:
+                # Saxon finished this source. Drop native wrappers so the
+                # snapshot file can be unlinked (needed on Windows).
+                gc.collect()
         if svrl is None:
-            raise EngineError(f"XSLT produced no SVRL: {xml_path.name}")
+            raise EngineError(f"XSLT produced no SVRL: {name}")
         return svrl
 
     def close(self) -> None:
-        closer = getattr(self._proc, "release", None)
-        if callable(closer):
-            closer()
+        compiled = getattr(self, "_compiled", None)
+        if compiled is not None:
+            compiled.clear()
+        self._xslt = None
+        proc = getattr(self, "_proc", None)
+        self._proc = None
+        if proc is not None:
+            closer = getattr(proc, "release", None)
+            if callable(closer):
+                closer()
+            del proc
+        gc.collect()
 
 
 def canonical_json(payload: Any) -> str:
@@ -457,9 +709,12 @@ def validate_files(
     annotations: list[str] = []
     try:
         for path in files:
-            resolved_syntax = resolve_syntax(path, syntax)
+            data = refuse_invoice_dtd(path)
+            resolved_syntax = resolve_syntax(path, syntax, data=data)
             xslt_info = xslt[resolved_syntax]
-            svrl = engine.transform(path, Path(xslt_info["path"]))
+            svrl = engine.transform_snapshot(
+                data, Path(xslt_info["path"]), name=path.name
+            )
             failed = parse_failed_asserts(svrl)
             ids = [item["id"] for item in failed]
             rel = display_path(path, cwd=cwd)
@@ -467,7 +722,7 @@ def validate_files(
                 "failed_assert_count": len(failed),
                 "failed_assert_ids": ids,
                 "path": rel,
-                "sha256": sha256_file(path),
+                "sha256": hashlib.sha256(data).hexdigest(),
                 "syntax": resolved_syntax,
                 "verdict": "fail" if ids else "pass",
                 "xslt": xslt_info["logical"],
