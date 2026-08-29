@@ -20,9 +20,9 @@ We do **not** publish response-time SLAs in this file.
 
 Do not open public GitHub issues for exploitable supply-chain or code-execution findings before coordinated disclosure.
 
-### GitHub private vulnerability reporting (prerequisite not met)
+### GitHub private vulnerability reporting
 
-Private vulnerability reporting is **not enabled** on `facturxapi/validate-einvoice` at the time of writing. This file therefore does **not** advertise that channel. Enabling it is a documented prerequisite in [`docs/RELEASE_AND_RULESET.md`](docs/RELEASE_AND_RULESET.md); once enabled and verified, a follow-up release may add it here.
+Private vulnerability reporting is **enabled** on `facturxapi/validate-einvoice`. Use the repository Security advisory form for coordinated disclosure. The email channel above remains valid.
 
 ## Scope
 
