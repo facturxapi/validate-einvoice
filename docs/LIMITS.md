@@ -19,7 +19,18 @@ not a published maximum.
 | `jdk.xml.maxElementDepth` | 100 |
 | `jdk.xml.entityExpansionLimit` | 2500 |
 
-This change does not alter entity or URI resolution.
+## DTD / protocol confine (C + B)
+
+C (required): stdlib `xml.parsers.expat` `StartDoctypeDeclHandler` refuses
+any DOCTYPE before Saxon. Invoice bytes are not rewritten; Saxon uses
+`source_file=` on the same path. `files[].sha256` is the hash of those
+raw bytes.
+
+B (additional): after `PySaxonProcessor`, `allowedProtocols=file` (never
+empty: that breaks `stylesheet_file=`). Linux-measured HTTP-only extra.
+B does not block `file://` SYSTEM; C covers that. No portable knob
+blocks both HTTP and file SYSTEM without breaking XSLT load. B never
+replaces C.
 
 ## Annotation text
 
