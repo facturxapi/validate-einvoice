@@ -135,11 +135,14 @@ def main() -> int:
     stage.mkdir(parents=True, exist_ok=True)
     (stage / "official.json").write_bytes(official_1.read_bytes())
     (stage / "mutants.json").write_bytes(mutants_path.read_bytes())
-    digest_lines: list[str] = []
+    digest_entries: list[tuple[str, str]] = []
     for kind in ("official", "mutants"):
-        for path in sorted((ROOT / "testdata" / kind).glob("*.xml")):
-            digest_lines.append(f"{sha256_file(path)}  testdata/{kind}/{path.name}")
-    (stage / "testdata.sha256").write_bytes(("\n".join(digest_lines) + "\n").encode("utf-8"))
+        for path in (ROOT / "testdata" / kind).glob("*.xml"):
+            rel = f"testdata/{kind}/{path.name}"
+            digest_entries.append((rel, sha256_file(path)))
+    digest_entries.sort(key=lambda item: item[0])
+    digest_text = "".join(f"{digest}  {rel}\n" for rel, digest in digest_entries)
+    (stage / "testdata.sha256").write_bytes(digest_text.encode("utf-8"))
     for name in ("official.json", "mutants.json", "testdata.sha256"):
         raw = (stage / name).read_bytes()
         if b"\r" in raw:

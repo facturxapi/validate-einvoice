@@ -130,12 +130,16 @@ def main(argv: list[str] | None = None) -> int:
     for key, blobs in loaded.items():
         os_name, py = key
         cell_name = f"selftest-reports-{os_name}-py{py}"
-        for name in REPORT_NAMES:
+        for name in ("official.json", "mutants.json"):
             if blobs[name] != reference[name]:
                 fail(
                     f"{cell_name}/{name} bytes != {REQUIRED_OS[0]}-py{REQUIRED_PY} "
                     f"({sha256_bytes(blobs[name])} vs {sha256_bytes(reference[name])})"
                 )
+        ref_td = parse_digest(reference["testdata.sha256"].decode("utf-8"))
+        got_td = parse_digest(blobs["testdata.sha256"].decode("utf-8"))
+        if got_td != ref_td:
+            fail(f"{cell_name}/testdata.sha256 fixture hashes != {REQUIRED_OS[0]}-py{REQUIRED_PY}")
 
     compare_reports("official.json", reference, expected_ids)
     compare_reports("mutants.json", reference, expected_ids)
