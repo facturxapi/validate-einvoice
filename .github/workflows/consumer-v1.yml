@@ -1,0 +1,77 @@
+name: consumer-pin-v1
+
+on:
+  push:
+    branches: [ci/consumer-v1.1.1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  official:
+    name: consumer official ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: facturxapi/validate-einvoice
+          ref: v1
+      - id: en16931
+        uses: facturxapi/validate-einvoice@v1
+        with:
+          files: testdata/official/*.xml
+          syntax: auto
+          fail-on: failed-assert
+          version: "1.3.16"
+      - name: Require official LF hash
+        shell: bash
+        env:
+          GOT: ${{ steps.en16931.outputs.report-sha256 }}
+          VERDICT: ${{ steps.en16931.outputs.verdict }}
+          FAILED: ${{ steps.en16931.outputs.failed-count }}
+        run: |
+          test "$VERDICT" = "pass"
+          test "$FAILED" = "0"
+          test "$GOT" = "eaa0dc88dc46f88edca7808556f27faf2843d7e454f272a944a8e289a04cd717"
+          echo "OK official $GOT"
+
+  mutants:
+    name: consumer mutants ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: facturxapi/validate-einvoice
+          ref: v1
+      - id: mutants
+        continue-on-error: true
+        uses: facturxapi/validate-einvoice@v1
+        with:
+          files: testdata/mutants/*.xml
+          syntax: auto
+          fail-on: failed-assert
+          version: "1.3.16"
+      - name: Require mutant failure + LF hash
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.mutants.outcome }}
+          GOT: ${{ steps.mutants.outputs.report-sha256 }}
+          VERDICT: ${{ steps.mutants.outputs.verdict }}
+          FAILED: ${{ steps.mutants.outputs.failed-count }}
+        run: |
+          test "$OUTCOME" = "failure"
+          test "$VERDICT" = "fail"
+          test "$FAILED" = "10"
+          test "$GOT" = "5ee08caf8a868a5d1a2333cb3d912507bb312a619e5f7daae02eaa6d94f9d85b"
+          echo "OK mutants $GOT"
