@@ -30,6 +30,7 @@ jobs:
           fail-on: failed-assert
           version: "1.3.16"
       - name: Require official LF hash
+        shell: bash
         env:
           GOT: ${{ steps.en16931.outputs.report-sha256 }}
           VERDICT: ${{ steps.en16931.outputs.verdict }}
@@ -62,6 +63,7 @@ jobs:
           fail-on: failed-assert
           version: "1.3.16"
       - name: Require mutant failure + LF hash
+        shell: bash
         env:
           OUTCOME: ${{ steps.mutants.outcome }}
           GOT: ${{ steps.mutants.outputs.report-sha256 }}
