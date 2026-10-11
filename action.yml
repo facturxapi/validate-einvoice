@@ -1,7 +1,7 @@
 name: 'Validate EN16931 e-invoice'
 description: >-
-  Run the official ConnectingEurope EN16931 1.3.16 XSLT (CII and UBL)
-  on XML invoices and fail the job on svrl:failed-assert.
+  Run the official ConnectingEurope EN16931 1.3.16 XSLT on Factur-X /
+  ZUGFeRD (CII) and UBL XML; fail on svrl:failed-assert.
 author: 'euphyra-dev'
 
 branding:
