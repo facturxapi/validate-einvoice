@@ -6,16 +6,14 @@ This document describes the **expected** GitHub settings for `facturxapi/validat
 
 | Artifact | Policy |
 |---|---|
-| Marketplace major tag `v1` | **Mutable** convenience channel. It points at `b1aec930` (`v1.1.1`, checked 2026-10-11; includes lot-1 supply-chain hardening and the DTD/entity gate before Saxon). |
-| Patch tags `v1.x.y` | Immutable once published; never force-move. Lot 1 should ship as a new `v1.x.y` with the hardened tree SHA in release notes. |
+| Marketplace major tag `v1` | **Mutable** convenience channel, moved to each new `v1.x.y`. It points at `a805a904` (`v1.1.2`, checked 2026-10-12). |
+| Patch tags `v1.x.y` | Immutable once published; never force-move. Release notes name the tagged commit SHA. |
 | `main` | Integration branch; must pass all CI gates before tag cut. |
 
-### Two-phase consumer pinning
+### Consumer pinning
 
-1. **Pre–lot-1 (`@v1` → `b364f7c3`)** — validation behaviour only; no hashed lock / external `uses` pin gate.
-2. **Post–lot-1 release** — publish the merge commit SHA in GitHub Releases; consumers pin that 40-character SHA for a frozen hardened tree.
-
-Do not document `b364f7c3` as the hardened recommendation after lot 1 merges.
+- `@v1` follows the latest `v1.x.y`; `@v1.x.y` names one release; the 40-character commit SHA from the release notes is the frozen tree.
+- Every tag from `v1.1.1` on carries the hashed lock, the external `uses` pin gate and the DOCTYPE/entity gate. `v1.0.0` and `v1.1.0` (`b364f7c3`) do not; never recommend them.
 
 ### Tag cut checklist
 
@@ -24,6 +22,7 @@ Do not document `b364f7c3` as the hardened recommendation after lot 1 merges.
 3. `scripts/check_upstream.py` unchanged or intentionally updated with vendor pin review.
 4. Update `README.md` / `NOTICE` only when the user-facing contract changes.
 5. Create annotated tag `v1.x.y` on the merge commit; publish release notes referencing the commit SHA.
+6. Prove the tag as a consumer from a throwaway branch (`uses: facturxapi/validate-einvoice@v1.x.y`, expected `report-sha256` for official examples and mutants), then move `v1` and delete the branch. That branch is red on the Supply-chain gate and the self-test by design: both refuse an external `uses` by tag, and its workflows are outside the tree digest.
 
 ## Required CI checks (recommended ruleset)
 

@@ -2,11 +2,12 @@
 
 ## Supported versions
 
-| Release line | Supported | Supply-chain hardening (lot 1) |
+| Release line | Supported | Hardening controls below |
 |---|---|---|
-| `v1` major tag (**mutable**) | yes | **no** on the current `v1` pointer (`b364f7c3`) |
-| Next `v1.x` after lot 1 merge | planned | **yes** — hashed lock + external `uses` pin gate |
-| `main` | development only | in progress until tagged |
+| `v1` major tag (**mutable**, points at `v1.1.2`) | yes | **yes** |
+| `v1.1.1`, `v1.1.2` | yes | **yes** |
+| `v1.0.0`, `v1.1.0` | no — move to `v1` or the latest `v1.x.y` | **no** |
+| `main` | development only | checked on every push |
 
 Security fixes land on `main` first, then ship in the next `v1.x` tag after review.
 
@@ -31,19 +32,21 @@ In scope for this repository:
 - third-party GitHub Action pins and Python dependency integrity;
 - vendored EN16931 XSLT supply chain (`vendor/`, `scripts/check_upstream.py`);
 - the composite action install path (`action.yml`, `requirements.lock`);
-- CI workflows under `.github/workflows/`.
+- CI workflows under `.github/workflows/`;
+- the XML input path (DOCTYPE / external-entity refusal, Saxon resource resolution).
 
-Out of scope for this lot (handled separately):
+Out of scope:
 
-- hostile XML / Saxon runtime hardening;
 - consumer repository branch protection settings (documented, not modified by automation here).
 
-## Hardening controls (lot 1)
+## Hardening controls (since `v1.1.1`)
 
 - Every external `uses:` (except `./`) is pinned to a **full commit SHA** listed in `supply-chain/action-pins.yaml`.
 - Python dependencies install from **`requirements.lock`** with `--require-hashes`.
 - `scripts/check_supply_chain.py` fails on mutable external refs, unknown manifests, lock drift, or tree digest changes.
 - CI workflow **Supply-chain gate** runs on every push and pull request.
+- Invoices with a DOCTYPE or external entities are refused by an XML parser before Saxon runs; Saxon then transforms a private snapshot of the same bytes.
+- Saxon may only resolve `file` resources: `document()` cannot reach the network.
 
 ## Coordinated disclosure
 

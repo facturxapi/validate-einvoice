@@ -1,8 +1,8 @@
 # Example workflow for this repository (same-repo checkout).
 #
 # Downstream consumers: pin `facturxapi/validate-einvoice@<40-char-sha>` from the
-# lot-1 release notes after publish. The moving `@v1` tag is a mutable convenience
-# channel and currently points at pre-hardening `b364f7c3`.
+# release notes (v1.1.2: a805a904f9fa1a7d51db5a4160e863748cc3733d). The moving
+# `@v1` tag is a mutable convenience channel that follows the latest v1.x.y.
 
 name: Validate EN16931 invoices
 

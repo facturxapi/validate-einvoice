@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -99,6 +101,31 @@ class SelectLatestTests(unittest.TestCase):
     def test_payload_must_be_a_list(self) -> None:
         with self.assertRaises(check_upstream.InstrumentFailure):
             check_upstream.parse_releases({"message": "not a list"})
+
+
+class RequestAuthTests(unittest.TestCase):
+    API = "https://api.github.com/repos/ConnectingEurope/eInvoicing-EN16931/releases"
+    ASSET = "https://github.com/ConnectingEurope/eInvoicing-EN16931/releases/download/validation-1.3.16/en16931-cii-1.3.16.zip"
+
+    def auth(self, url: str, token: str | None) -> str | None:
+        env = {} if token is None else {"GITHUB_TOKEN": token}
+        with mock.patch.dict(os.environ, env, clear=True):
+            request = check_upstream.build_request(url, "ua")
+        return request.get_header("Authorization")
+
+    def test_token_sent_to_api_host(self) -> None:
+        self.assertEqual(self.auth(self.API, "t0k"), "Bearer t0k")
+
+    def test_token_never_sent_to_asset_download(self) -> None:
+        self.assertIsNone(self.auth(self.ASSET, "t0k"))
+
+    def test_no_token_means_anonymous(self) -> None:
+        self.assertIsNone(self.auth(self.API, None))
+
+    def test_token_not_replayed_on_redirect(self) -> None:
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "t0k"}):
+            request = check_upstream.build_request(self.API, "ua")
+        self.assertNotIn("Authorization", request.headers)
 
 
 if __name__ == "__main__":

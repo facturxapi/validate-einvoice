@@ -19,4 +19,6 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compare vendored XSLT pins to ConnectingEurope
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/check_upstream.py
