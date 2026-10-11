@@ -6,7 +6,7 @@ This document describes the **expected** GitHub settings for `facturxapi/validat
 
 | Artifact | Policy |
 |---|---|
-| Marketplace major tag `v1` | **Mutable** convenience channel. The current pointer (`b364f7c3`) predates lot-1 supply-chain hardening. |
+| Marketplace major tag `v1` | **Mutable** convenience channel. It points at `b1aec930` (`v1.1.1`, checked 2026-10-11; includes lot-1 supply-chain hardening and the DTD/entity gate before Saxon). |
 | Patch tags `v1.x.y` | Immutable once published; never force-move. Lot 1 should ship as a new `v1.x.y` with the hardened tree SHA in release notes. |
 | `main` | Integration branch; must pass all CI gates before tag cut. |
 
@@ -52,9 +52,9 @@ Optional but recommended:
 
 ## Security reporting prerequisites
 
-| Setting | Status (Aug 2026) | Action |
+| Setting | Status (Oct 2026) | Action |
 |---|---|---|
-| Private vulnerability reporting | **disabled** (`enabled=false`) | Enable in repo Settings → Code security before advertising in `SECURITY.md` |
+| Private vulnerability reporting | **enabled** (`enabled=true`, checked 2026-10-11) | Advertised in `SECURITY.md` |
 | Contact email | `contact@facturxapi.com` | Published in `SECURITY.md` without SLA claims |
 
 ## What this repo does not automate
