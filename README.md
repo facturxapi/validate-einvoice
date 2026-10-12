@@ -13,14 +13,18 @@ document.
 
 ## Usage
 
-### Pinning (two release phases)
+### Pinning
 
-| Channel | What it is | Supply-chain hardening |
-|---|---|---|
-| `@v1` major tag | **Mutable** Marketplace channel (convenience) | **No** on the current pointer (`b364f7c3`, pre–lot-1) |
-| Full commit SHA from a **lot-1 release** | Frozen tree | **Yes** — hashed lock + external `uses` pin gate |
+| Ref | What it is |
+|---|---|
+| `@v1` | **Mutable** major tag (Marketplace channel). It moves to each new `v1.x.y`; it points at `v1.1.2` (`a805a904`, checked 2026-10-12). |
+| `@v1.1.2` | Release tag, never moved once published. |
+| `@a805a904f9fa1a7d51db5a4160e863748cc3733d` | Full commit SHA of `v1.1.2`: the frozen tree. |
 
-Until lot 1 is tagged, do **not** treat `b364f7c3` as a hardened pin. After the lot-1 release, use the 40-character SHA from the GitHub Release (not the old `v1` pointer).
+Every release from `v1.1.1` on pins third-party Actions by commit SHA,
+installs Python dependencies with `--require-hashes`, and refuses
+invoices with a DOCTYPE or external entities before Saxon runs.
+`v1.0.0` and `v1.1.0` have none of this; do not pin them.
 
 **Same-repo workflow** (this repository checked out):
 
@@ -30,15 +34,15 @@ Until lot 1 is tagged, do **not** treat `b364f7c3` as a hardened pin. After the 
     files: invoices/**/*.xml
 ```
 
-**Downstream consumer** (after lot-1 release — replace with the published SHA):
+**Downstream consumer**, frozen on the `v1.1.2` commit:
 
 ```yaml
-- uses: facturxapi/validate-einvoice@<40-char-sha-from-lot-1-release>
+- uses: facturxapi/validate-einvoice@a805a904f9fa1a7d51db5a4160e863748cc3733d # v1.1.2
   with:
     files: invoices/**/*.xml
 ```
 
-**Mutable channel** — `@v1` tracks the moving major tag (not frozen; currently pre-hardening):
+**Mutable channel** — `@v1` follows the latest `v1.x.y` (not frozen):
 
 ```yaml
 - uses: facturxapi/validate-einvoice@v1
@@ -56,7 +60,7 @@ Copy-paste workflow: [`examples/validate-invoices.yml`](examples/validate-invoic
 
 ## Public self-test (24 Aug 2026)
 
-Pre–lot-1 public run on the **mutable `@v1` pointer** (`b364f7c3`, no supply-chain hardening). One green workflow: official examples pass; mutants make the Action step fail (expected).
+Public run on `@v1` as it stood that day (`v1.1.0`, `b364f7c3`, before the hardening shipped in `v1.1.1`). One green workflow: official examples pass; mutants make the Action step fail (expected).
 
 - Run: https://github.com/facturxapi/validate-einvoice/actions/runs/32736104158
 - Official examples (ubuntu): [job](https://github.com/facturxapi/validate-einvoice/actions/runs/32736104158/job/97459169913)
@@ -78,13 +82,13 @@ When this repository is checked out as the workflow repo (or vendored):
 
 
 ```yaml
-# Frozen — pin the lot-1 release SHA from GitHub Releases (not b364f7c3)
-- uses: facturxapi/validate-einvoice@<40-char-sha-from-lot-1-release>
+# Frozen — full commit SHA of a release
+- uses: facturxapi/validate-einvoice@a805a904f9fa1a7d51db5a4160e863748cc3733d # v1.1.2
   with:
     files: invoices/**/*.xml
     fail-on: failed-assert
 
-# Mutable — @v1 major tag (currently pre-hardening)
+# Mutable — @v1 major tag (follows the latest v1.x.y)
 - uses: facturxapi/validate-einvoice@v1
   with:
     files: invoices/**/*.xml

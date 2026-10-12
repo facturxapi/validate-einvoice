@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -26,6 +27,7 @@ EXIT_DRIFT = 1
 EXIT_INSTRUMENT = 2
 TIMEOUT_S = 60
 TAG_RE = re.compile(r"^validation-(.+)$")
+API_HOST = "api.github.com"
 
 
 class InstrumentFailure(Exception):
@@ -43,7 +45,7 @@ def load_pins(path: Path) -> dict[str, Any]:
         raise InstrumentFailure(f"cannot read pin file {path.name}: {exc}") from exc
 
 
-def http_get(url: str, user_agent: str) -> bytes:
+def build_request(url: str, user_agent: str) -> urllib.request.Request:
     request = urllib.request.Request(
         url,
         headers={
@@ -51,6 +53,18 @@ def http_get(url: str, user_agent: str) -> bytes:
             "Accept": "application/vnd.github+json",
         },
     )
+    # Anonymous API calls share a 60/hour limit per runner IP; a 403 there is an
+    # instrument failure, not drift. The token goes to api.github.com only (never
+    # to release-asset downloads) and is not replayed on redirects.
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    parts = urllib.parse.urlsplit(url)
+    if token and parts.scheme == "https" and parts.hostname == API_HOST:
+        request.add_unredirected_header("Authorization", f"Bearer {token}")
+    return request
+
+
+def http_get(url: str, user_agent: str) -> bytes:
+    request = build_request(url, user_agent)
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
             return response.read()
