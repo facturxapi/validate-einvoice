@@ -57,7 +57,8 @@ def build_request(url: str, user_agent: str) -> urllib.request.Request:
     # instrument failure, not drift. The token goes to api.github.com only (never
     # to release-asset downloads) and is not replayed on redirects.
     token = os.environ.get("GITHUB_TOKEN", "").strip()
-    if token and urllib.parse.urlsplit(url).hostname == API_HOST:
+    parts = urllib.parse.urlsplit(url)
+    if token and parts.scheme == "https" and parts.hostname == API_HOST:
         request.add_unredirected_header("Authorization", f"Bearer {token}")
     return request
 
