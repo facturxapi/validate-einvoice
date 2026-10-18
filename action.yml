@@ -1,7 +1,7 @@
 name: 'Validate EN16931 e-invoice'
 description: >-
-  Run the official EN16931 1.3.16 XSLT (1.3.17 opt-in) on Factur-X /
-  ZUGFeRD CII XML and UBL XML; fail on svrl:failed-assert.
+  Official EN16931 XSLT (1.3.16 by default, 1.3.17 opt-in) on Factur-X /
+  ZUGFeRD CII and UBL XML; fails on svrl:failed-assert.
 author: 'euphyra-dev'
 
 branding:

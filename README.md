@@ -83,7 +83,7 @@ Copy-paste workflow: [`examples/validate-invoices.yml`](examples/validate-invoic
 ## Which FacturX repo should I use?
 
 - [validate-einvoice](https://github.com/facturxapi/validate-einvoice) — GitHub Action that runs the official ConnectingEurope EN16931 XSLT artefacts (CII/UBL): 1.3.16 by default, 1.3.17 opt-in.
-- [en16931-oracles](https://github.com/facturxapi/en16931-oracles) — Replayable fixtures, receipts and mutants for EN16931 1.3.17, plus a BR-FR pack for the French Flux2 rules (France_RFE `v1.4.0.02` / `v1.4.0.03`).
+- [en16931-oracles](https://github.com/facturxapi/en16931-oracles) — Replayable fixtures, receipts and mutants for EN16931 1.3.17, plus a BR-FR pack for the French Flux2 rules (tested on France_RFE `v1.4.0.02` / `v1.4.0.03`).
 - [awesome-einvoicing](https://github.com/facturxapi/awesome-einvoicing) — Sourced map of specs, validators, libraries and corpora. Inclusion is not a ranking.
 
 ## Public self-test (24 Aug 2026)
