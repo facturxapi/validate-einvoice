@@ -106,6 +106,28 @@ class TestdataLfTests(unittest.TestCase):
         self.assertNotIn("*.xml text eol=lf", assignments)
         self.assertNotIn("*.xml eol=lf", assignments)
 
+    def test_gitattributes_keeps_docs_binaries_out_of_text(self) -> None:
+        binaries = sorted(
+            p.relative_to(ROOT).as_posix()
+            for p in (ROOT / "docs").rglob("*")
+            if p.is_file() and b"\0" in p.read_bytes()
+        )
+        self.assertGreaterEqual(len(binaries), 2)
+        try:
+            proc = subprocess.run(
+                ["git", "check-attr", "text", "--", *binaries],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest("not a git checkout")
+        lines = proc.stdout.splitlines()
+        self.assertEqual(len(lines), len(binaries))
+        for line in lines:
+            self.assertTrue(line.endswith(": text: unset"), msg=line)
+
 
 class FileHashDocumentsOldBugTests(unittest.TestCase):
     def test_lf_vs_crlf_changes_files_sha256(self) -> None:

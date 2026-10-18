@@ -21,3 +21,14 @@ scripts/check_supply_chain.py text eol=lf
 # Testdata fixtures only. Windows checkout must stay LF so files[].sha256
 # matches Linux/macOS. User invoices are not rewritten.
 testdata/**/*.xml text eol=lf
+
+# Binary files under docs/ (overrides `docs/** text` above). As text, a PNG
+# whose bytes contain CRLF shows as modified after every checkout, and
+# `git add` would rewrite it (CRLF -> LF) and break the image.
+docs/**/*.png binary
+docs/**/*.jpg binary
+docs/**/*.jpeg binary
+docs/**/*.gif binary
+docs/**/*.webp binary
+docs/**/*.ico binary
+docs/**/*.pdf binary
