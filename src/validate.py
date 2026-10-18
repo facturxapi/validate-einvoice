@@ -25,7 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Iterator
 
-DEFAULT_VERSION = "1.3.17"
+DEFAULT_VERSION = "1.3.16"
 ENGINE_NAME = "SaxonC-HE 13.0"
 ENGINE_PKG_PIN = "saxonche==13.0.0"
 ENGINE_PKG_PREFIX = "13.0"
@@ -40,8 +40,9 @@ UBL_INVOICE_NS = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
 UBL_CREDIT_NS = "urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2"
 
 # Vendored ConnectingEurope releases, unmodified: (path, SHA256) per syntax.
-# The default follows the latest release; older ones stay selectable so a
-# workflow that pins `version:` keeps the rules it was written against.
+# The default is the release in force (the Commission registry lists 1.3.17
+# as effective from 15/11/26); a newer one is selectable before that date and
+# older ones stay selectable so a pinned `version:` keeps its rules.
 VENDORED_XSLT: dict[str, dict[str, tuple[str, str]]] = {
     "1.3.17": {
         "CII": (
@@ -65,12 +66,21 @@ VENDORED_XSLT: dict[str, dict[str, tuple[str, str]]] = {
     },
 }
 
-# 1.3.17 renamed the IGIC / IPSI rule families (upstream issue #519) and
-# removed CII-SR-471 (#514). A `fail-on` id that no longer exists would
-# never fire, so it is refused with the new name instead.
-RENAMED_IN_1_3_17 = {
-    **{f"BR-AF-{n:02d}": f"BR-IP-{n:02d}" for n in range(1, 11)},
-    **{f"BR-AG-{n:02d}": f"BR-IG-{n:02d}" for n in range(1, 11)},
+# 1.3.17 renamed the IGIC (BR-AF) and IPSI (BR-AG) rule families (upstream
+# issue #519), but not the same way in both syntaxes: IGIC became BR-IG in UBL
+# and BR-IP in CII, IPSI the reverse. It also removed CII-SR-471 (#514).
+# A `fail-on` id written for the other version is translated per syntax with
+# a warning, so a workflow on @v1 keeps its gate; an id that neither version
+# knows could never fire, so it is refused.
+RENAMED_IN_1_3_17: dict[str, dict[str, str]] = {
+    "CII": {
+        **{f"BR-AF-{n:02d}": f"BR-IP-{n:02d}" for n in range(1, 11)},
+        **{f"BR-AG-{n:02d}": f"BR-IG-{n:02d}" for n in range(1, 11)},
+    },
+    "UBL": {
+        **{f"BR-AF-{n:02d}": f"BR-IG-{n:02d}" for n in range(1, 11)},
+        **{f"BR-AG-{n:02d}": f"BR-IP-{n:02d}" for n in range(1, 11)},
+    },
 }
 REMOVED_IN_1_3_17 = {"CII-SR-471"}
 XSLT_RULE_ID_RE = re.compile(r'<xsl:attribute name="id">([^<]+)</xsl:attribute>')
@@ -499,32 +509,66 @@ def load_xslt(root: Path, version: str) -> dict[str, dict[str, str | Path]]:
     return resolved
 
 
-def xslt_rule_ids(xslt: dict[str, dict[str, str | Path]]) -> set[str]:
-    ids: set[str] = set()
-    for info in xslt.values():
-        text = Path(info["path"]).read_text(encoding="utf-8")
-        ids.update(XSLT_RULE_ID_RE.findall(text))
-    return ids
+def xslt_rule_ids(xslt: dict[str, dict[str, str | Path]]) -> dict[str, set[str]]:
+    return {
+        syntax: set(XSLT_RULE_ID_RE.findall(Path(info["path"]).read_text(encoding="utf-8")))
+        for syntax, info in xslt.items()
+    }
 
 
-def check_fail_on_ids(fail_on: dict[str, Any], known: set[str], version: str) -> None:
+def resolve_fail_on_ids(
+    fail_on: dict[str, Any], known: dict[str, set[str]], version: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Map `fail-on` ids onto each syntax's XSLT; return (fail_on, warnings)."""
     if fail_on["mode"] != "ids":
-        return
-    unknown = [rule for rule in fail_on["ids"] if rule not in known]
-    if not unknown:
-        return
-    notes = []
-    for rule in unknown:
-        if rule in RENAMED_IN_1_3_17 and RENAMED_IN_1_3_17[rule] in known:
-            notes.append(f"{rule} (renamed {RENAMED_IN_1_3_17[rule]} in 1.3.17)")
-        elif rule in REMOVED_IN_1_3_17:
-            notes.append(f"{rule} (removed in 1.3.17)")
-        else:
-            notes.append(rule)
-    raise ConfigError(
-        f"fail-on id(s) not in the EN16931 {version} XSLT, so they could never fire: "
-        + ", ".join(notes)
-    )
+        return fail_on, []
+    watch: dict[str, list[str]] = {syntax: [] for syntax in known}
+    warnings: list[str] = []
+    unknown: list[str] = []
+    for rule in fail_on["ids"]:
+        found = False
+        translated: list[str] = []
+        for syntax, ids in known.items():
+            renamed = RENAMED_IN_1_3_17[syntax]
+            aliases = {**renamed, **{new: old for old, new in renamed.items()}}
+            target = rule if rule in ids else aliases.get(rule)
+            if target not in ids:
+                continue
+            found = True
+            if target != rule:
+                translated.append(f"{target} in {syntax}")
+            if target not in watch[syntax]:
+                watch[syntax].append(target)
+        if translated:
+            if any(rule in renamed for renamed in RENAMED_IN_1_3_17.values()):
+                warnings.append(
+                    f"fail-on: {rule} was renamed in EN16931 1.3.17; filtering on "
+                    f"{' and '.join(translated)}. Use the new id in the workflow."
+                )
+            else:
+                warnings.append(
+                    f"fail-on: {rule} is a 1.3.17 id; with version {version} "
+                    f"filtering on {' and '.join(translated)}."
+                )
+        elif not found and rule in REMOVED_IN_1_3_17:
+            warnings.append(
+                f"fail-on: {rule} was removed in EN16931 1.3.17 and cannot "
+                f"fire with version {version}; ignored."
+            )
+        elif not found:
+            unknown.append(rule)
+    if unknown:
+        raise ConfigError(
+            f"fail-on id(s) not in the EN16931 {version} XSLT, so they could never fire: "
+            + ", ".join(unknown)
+        )
+    return {**fail_on, "watch": watch}, warnings
+
+
+def warning_line(message: str, *, github: bool) -> str:
+    if github:
+        return f"::warning title=fail-on::{escape_workflow_data(message)}"
+    return f"warning: {message}"
 
 
 class SaxonEngine:
@@ -612,7 +656,8 @@ def file_triggers_fail(row: dict[str, Any], fail_on: dict[str, Any]) -> bool:
     ids = list(row["failed_assert_ids"])
     if fail_on["mode"] == "failed-assert":
         return len(ids) > 0
-    watched = set(fail_on["ids"])
+    watch = fail_on.get("watch")
+    watched = set(watch[row["syntax"]] if watch else fail_on["ids"])
     return any(item in watched for item in ids)
 
 
@@ -759,7 +804,9 @@ def validate_files(
 ) -> dict[str, Any]:
     fail_on = parse_fail_on(fail_on_raw)
     xslt = load_xslt(root, version)
-    check_fail_on_ids(fail_on, xslt_rule_ids(xslt), version)
+    fail_on, fail_on_warnings = resolve_fail_on_ids(
+        fail_on, xslt_rule_ids(xslt), version
+    )
     engine = SaxonEngine()
     rows: list[dict[str, Any]] = []
     annotations: list[str] = []
@@ -829,6 +876,10 @@ def validate_files(
         "report_text": report_text,
         "report_sha256": report_sha,
         "annotations": annotations,
+        "warnings": [
+            warning_line(message, github=emit_annotations)
+            for message in fail_on_warnings
+        ],
         "exit_code": EXIT_FAIL if verdict == "fail" else EXIT_OK,
     }
 
@@ -839,6 +890,8 @@ def print_console(result: dict[str, Any]) -> None:
     emit_line(f"version: {payload['version']}")
     emit_line(f"syntax : {payload['syntax']}")
     emit_line(f"fail-on: {payload['fail_on']}")
+    for line in result["warnings"]:
+        emit_line(line)
     emit_line("")
     emit_line(f"{'file':<42} {'syn':<4} {'n':>3}  verdict  ids")
     emit_line("-" * 88)
