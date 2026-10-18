@@ -31,6 +31,10 @@ contain is now a configuration error (exit 2) that gives the new name,
 instead of a filter that could never fire. To keep 1.3.16, set
 `version: '1.3.16'` or pin `v1.1.2`.
 
+The Commission's [registry of EN16931 artefacts](https://ec.europa.eu/digital-building-blocks/sites/spaces/DIGITAL/pages/467108974/Registry+of+supporting+artefacts+to+implement+EN16931)
+lists 1.3.17 as published on 12/10/26 with effective date 15/11/26; until
+then 1.3.16 is the version in operation.
+
 Every release from `v1.1.1` on pins third-party Actions by commit SHA,
 installs Python dependencies with `--require-hashes`, and refuses
 invoices with a DOCTYPE or external entities before Saxon runs.
