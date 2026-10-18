@@ -92,7 +92,7 @@ class SelectLatestTests(unittest.TestCase):
         self.assertEqual(latest["tag"], "validation-1.3.16")
 
     def test_compare_detects_new_tag(self) -> None:
-        latest = {"tag": "validation-1.3.17", "html_url": ""}
+        latest = {"tag": "validation-99.0.0", "html_url": ""}
         measured = {
             "cii": {"zip_sha256": "aa", "xslt_sha256": pins()["assets"]["cii"]["xslt_sha256"]},
             "ubl": {"zip_sha256": "bb", "xslt_sha256": pins()["assets"]["ubl"]["xslt_sha256"]},

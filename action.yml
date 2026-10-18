@@ -1,6 +1,6 @@
 name: 'Validate EN16931 e-invoice'
 description: >-
-  Run the official ConnectingEurope EN16931 1.3.16 XSLT on Factur-X /
+  Run the official ConnectingEurope EN16931 1.3.17 XSLT on Factur-X /
   ZUGFeRD CII XML and UBL XML; fail on svrl:failed-assert.
 author: 'euphyra-dev'
 
@@ -28,9 +28,11 @@ inputs:
     required: false
     default: 'failed-assert'
   version:
-    description: 'EN16931 XSLT version. Only the vendored 1.3.16 artefacts are shipped.'
+    description: >-
+      EN16931 XSLT version: 1.3.17 (default) or 1.3.16. Only these vendored,
+      unmodified ConnectingEurope artefacts are shipped.
     required: false
-    default: '1.3.16'
+    default: '1.3.17'
 
 outputs:
   verdict:

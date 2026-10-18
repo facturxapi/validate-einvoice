@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate EN16931 CII/UBL invoices with the official 1.3.16 XSLT.
+"""Validate EN16931 CII/UBL invoices with the official ConnectingEurope XSLT.
 
 Engine: SaxonC-HE 13.0 (saxonche==13.0.0).
 Never logs invoice bytes.
@@ -25,7 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Iterator
 
-SUPPORTED_VERSION = "1.3.16"
+DEFAULT_VERSION = "1.3.17"
 ENGINE_NAME = "SaxonC-HE 13.0"
 ENGINE_PKG_PIN = "saxonche==13.0.0"
 ENGINE_PKG_PREFIX = "13.0"
@@ -39,10 +39,41 @@ CII_NS = "urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
 UBL_INVOICE_NS = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
 UBL_CREDIT_NS = "urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2"
 
-CII_XSLT_REL = "vendor/en16931-1.3.16/xslt/EN16931-CII-validation.xslt"
-UBL_XSLT_REL = "vendor/en16931-1.3.16/xslt/EN16931-UBL-validation.xslt"
-CII_XSLT_SHA256 = "0b234dea2bbfee739b7761e607a992c17fab88773014ef56355b6158cfb1cc53"
-UBL_XSLT_SHA256 = "39f9d282867f1a49e7708d9e29a53da89643e1ee56f10cec1ebcf1277595fcbd"
+# Vendored ConnectingEurope releases, unmodified: (path, SHA256) per syntax.
+# The default follows the latest release; older ones stay selectable so a
+# workflow that pins `version:` keeps the rules it was written against.
+VENDORED_XSLT: dict[str, dict[str, tuple[str, str]]] = {
+    "1.3.17": {
+        "CII": (
+            "vendor/en16931-1.3.17/xslt/EN16931-CII-validation.xslt",
+            "0757f07909938b1b297b8356ab7b66406c89f1b342325385d6a2def998c817f0",
+        ),
+        "UBL": (
+            "vendor/en16931-1.3.17/xslt/EN16931-UBL-validation.xslt",
+            "fc4e6cfa8596bba0c2abd19038a98960c6ee9fc1f44566787c115efd4f4aca7c",
+        ),
+    },
+    "1.3.16": {
+        "CII": (
+            "vendor/en16931-1.3.16/xslt/EN16931-CII-validation.xslt",
+            "0b234dea2bbfee739b7761e607a992c17fab88773014ef56355b6158cfb1cc53",
+        ),
+        "UBL": (
+            "vendor/en16931-1.3.16/xslt/EN16931-UBL-validation.xslt",
+            "39f9d282867f1a49e7708d9e29a53da89643e1ee56f10cec1ebcf1277595fcbd",
+        ),
+    },
+}
+
+# 1.3.17 renamed the IGIC / IPSI rule families (upstream issue #519) and
+# removed CII-SR-471 (#514). A `fail-on` id that no longer exists would
+# never fire, so it is refused with the new name instead.
+RENAMED_IN_1_3_17 = {
+    **{f"BR-AF-{n:02d}": f"BR-IP-{n:02d}" for n in range(1, 11)},
+    **{f"BR-AG-{n:02d}": f"BR-IG-{n:02d}" for n in range(1, 11)},
+}
+REMOVED_IN_1_3_17 = {"CII-SR-471"}
+XSLT_RULE_ID_RE = re.compile(r'<xsl:attribute name="id">([^<]+)</xsl:attribute>')
 
 FAILED_BLOCK_RE = re.compile(
     r"<svrl:failed-assert\b([^>]*)>(.*?)</svrl:failed-assert>",
@@ -450,16 +481,12 @@ def require_engine_pkg() -> str:
 
 
 def load_xslt(root: Path, version: str) -> dict[str, dict[str, str | Path]]:
-    if version != SUPPORTED_VERSION:
-        raise ConfigError(
-            f"version {version} is not vendored; only {SUPPORTED_VERSION} is available"
-        )
-    mapping = {
-        "CII": (root / CII_XSLT_REL, CII_XSLT_SHA256, CII_XSLT_REL),
-        "UBL": (root / UBL_XSLT_REL, UBL_XSLT_SHA256, UBL_XSLT_REL),
-    }
+    if version not in VENDORED_XSLT:
+        available = ", ".join(VENDORED_XSLT)
+        raise ConfigError(f"version {version} is not vendored; available: {available}")
     resolved: dict[str, dict[str, str | Path]] = {}
-    for syntax, (path, expected, logical) in mapping.items():
+    for syntax, (logical, expected) in VENDORED_XSLT[version].items():
+        path = root / logical
         if not path.is_file():
             raise ConfigError(f"vendored XSLT missing: {logical}")
         digest = sha256_file(path)
@@ -470,6 +497,34 @@ def load_xslt(root: Path, version: str) -> dict[str, dict[str, str | Path]]:
             )
         resolved[syntax] = {"path": path, "sha256": digest, "logical": logical}
     return resolved
+
+
+def xslt_rule_ids(xslt: dict[str, dict[str, str | Path]]) -> set[str]:
+    ids: set[str] = set()
+    for info in xslt.values():
+        text = Path(info["path"]).read_text(encoding="utf-8")
+        ids.update(XSLT_RULE_ID_RE.findall(text))
+    return ids
+
+
+def check_fail_on_ids(fail_on: dict[str, Any], known: set[str], version: str) -> None:
+    if fail_on["mode"] != "ids":
+        return
+    unknown = [rule for rule in fail_on["ids"] if rule not in known]
+    if not unknown:
+        return
+    notes = []
+    for rule in unknown:
+        if rule in RENAMED_IN_1_3_17 and RENAMED_IN_1_3_17[rule] in known:
+            notes.append(f"{rule} (renamed {RENAMED_IN_1_3_17[rule]} in 1.3.17)")
+        elif rule in REMOVED_IN_1_3_17:
+            notes.append(f"{rule} (removed in 1.3.17)")
+        else:
+            notes.append(rule)
+    raise ConfigError(
+        f"fail-on id(s) not in the EN16931 {version} XSLT, so they could never fire: "
+        + ", ".join(notes)
+    )
 
 
 class SaxonEngine:
@@ -610,7 +665,7 @@ def annotation_line(rel_path: str, item: dict[str, str]) -> str:
 
 def markdown_summary(report: dict[str, Any]) -> str:
     lines = [
-        "## EN16931 1.3.16 validation",
+        f"## EN16931 {report['version']} validation",
         "",
         f"- Engine: `{report['engine']}` (`{report['engine_pkg']}`)",
         f"- XSLT version: `{report['version']}`",
@@ -704,6 +759,7 @@ def validate_files(
 ) -> dict[str, Any]:
     fail_on = parse_fail_on(fail_on_raw)
     xslt = load_xslt(root, version)
+    check_fail_on_ids(fail_on, xslt_rule_ids(xslt), version)
     engine = SaxonEngine()
     rows: list[dict[str, Any]] = []
     annotations: list[str] = []
@@ -802,7 +858,7 @@ def print_console(result: dict[str, Any]) -> None:
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate EN16931 CII/UBL XML with official XSLT 1.3.16."
+        description="Validate EN16931 CII/UBL XML with the official ConnectingEurope XSLT."
     )
     parser.add_argument(
         "--files",
@@ -824,7 +880,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--version",
         default=None,
-        help=f"XSLT version (only {SUPPORTED_VERSION} is vendored).",
+        help=f"XSLT version: {', '.join(VENDORED_XSLT)} (default {DEFAULT_VERSION}).",
     )
     parser.add_argument(
         "--report",
@@ -848,7 +904,7 @@ def resolve_inputs(args: argparse.Namespace) -> dict[str, Any]:
         raise ConfigError("files input is required")
     syntax = args.syntax or os.environ.get("INPUT_SYNTAX") or "auto"
     fail_on = args.fail_on or os.environ.get("INPUT_FAIL_ON") or "failed-assert"
-    version = args.version or os.environ.get("INPUT_VERSION") or SUPPORTED_VERSION
+    version = args.version or os.environ.get("INPUT_VERSION") or DEFAULT_VERSION
     return {
         "files": files,
         "syntax": syntax.strip(),

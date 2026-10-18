@@ -20,8 +20,8 @@ if str(SRC) not in sys.path:
 
 import validate  # noqa: E402
 
-LINUX_OFFICIAL_REPORT = "eaa0dc88dc46f88edca7808556f27faf2843d7e454f272a944a8e289a04cd717"
-LINUX_MUTANT_REPORT = "5ee08caf8a868a5d1a2333cb3d912507bb312a619e5f7daae02eaa6d94f9d85b"
+LINUX_OFFICIAL_REPORT = "5ab42d1f115a524f9ce524f65b8755bfab9cdc750d30d1b35548264716b3b95e"
+LINUX_MUTANT_REPORT = "35cb6995e323611b8e774be6b4e59e885bb8ea7b10a330a5d59b8c550c6ab803"
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -38,8 +38,7 @@ def testdata_xml() -> list[Path]:
 
 def file_row(kind: str, name: str, file_sha: str, ids: list[str]) -> dict:
     syntax = "UBL" if name.startswith("ubl-") else "CII"
-    xslt = validate.UBL_XSLT_REL if syntax == "UBL" else validate.CII_XSLT_REL
-    xslt_sha = validate.UBL_XSLT_SHA256 if syntax == "UBL" else validate.CII_XSLT_SHA256
+    xslt, xslt_sha = validate.VENDORED_XSLT[validate.DEFAULT_VERSION][syntax]
     return {
         "failed_assert_count": len(ids),
         "failed_assert_ids": list(ids),
@@ -68,7 +67,7 @@ def reconstruct_report(kind: str, expected: dict[str, list[str]], *, crlf: bool)
         "files": rows,
         "syntax": "auto",
         "verdict": "fail" if any(row["verdict"] == "fail" for row in rows) else "pass",
-        "version": validate.SUPPORTED_VERSION,
+        "version": validate.DEFAULT_VERSION,
     }
     text = validate.canonical_json(payload)
     return text, validate.sha256_text(text)
@@ -224,7 +223,7 @@ class SelftestGateScriptTests(unittest.TestCase):
                 "files": [file_row("official", name, "a" * 64, []) for name in names],
                 "syntax": "auto",
                 "verdict": "pass",
-                "version": validate.SUPPORTED_VERSION,
+                "version": validate.DEFAULT_VERSION,
             }
         )
         expected = json.loads((ROOT / "testdata" / "expected-ids.json").read_text(encoding="utf-8"))
@@ -238,7 +237,7 @@ class SelftestGateScriptTests(unittest.TestCase):
                 "files": mutant_files,
                 "syntax": "auto",
                 "verdict": "fail",
-                "version": validate.SUPPORTED_VERSION,
+                "version": validate.DEFAULT_VERSION,
             }
         )
         digest_lines = []
@@ -276,7 +275,7 @@ class SelftestGateScriptTests(unittest.TestCase):
                 "files": [file_row("official", name, "a" * 64, []) for name in names],
                 "syntax": "auto",
                 "verdict": "pass",
-                "version": validate.SUPPORTED_VERSION,
+                "version": validate.DEFAULT_VERSION,
             }
         )
         expected = json.loads((ROOT / "testdata" / "expected-ids.json").read_text(encoding="utf-8"))
@@ -289,7 +288,7 @@ class SelftestGateScriptTests(unittest.TestCase):
                 "files": [file_row("mutants", name, "b" * 64, expected[name]) for name in sorted(expected)],
                 "syntax": "auto",
                 "verdict": "fail",
-                "version": validate.SUPPORTED_VERSION,
+                "version": validate.DEFAULT_VERSION,
             }
         )
         digest_lines = [f"{row['sha256']}  {row['path']}" for row in json.loads(official)["files"]]

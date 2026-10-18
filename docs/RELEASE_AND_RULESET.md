@@ -6,7 +6,7 @@ This document describes the **expected** GitHub settings for `facturxapi/validat
 
 | Artifact | Policy |
 |---|---|
-| Marketplace major tag `v1` | **Mutable** convenience channel, moved to each new `v1.x.y`. It points at `a805a904` (`v1.1.2`, checked 2026-10-12). |
+| Marketplace major tag `v1` | **Mutable** convenience channel, moved to each new `v1.x.y`. It points at `v1.2.0` (EN16931 1.3.17 by default). |
 | Patch tags `v1.x.y` | Immutable once published; never force-move. Release notes name the tagged commit SHA. |
 | `main` | Integration branch; must pass all CI gates before tag cut. |
 

@@ -394,7 +394,7 @@ class OfficialBytesAndCrlfTests(unittest.TestCase):
             [path],
             syntax="auto",
             fail_on_raw="failed-assert",
-            version="1.3.16",
+            version=validate.DEFAULT_VERSION,
             root=ROOT,
             cwd=ROOT,
         )
@@ -420,7 +420,7 @@ class OfficialBytesAndCrlfTests(unittest.TestCase):
                 [path],
                 syntax="auto",
                 fail_on_raw="failed-assert",
-                version="1.3.16",
+                version=validate.DEFAULT_VERSION,
                 root=ROOT,
                 cwd=Path(tmp),
             )
@@ -446,7 +446,7 @@ class OfficialBytesAndCrlfTests(unittest.TestCase):
                         [path],
                         syntax="auto",
                         fail_on_raw="failed-assert",
-                        version="1.3.16",
+                        version=validate.DEFAULT_VERSION,
                         root=ROOT,
                     )
                 self.assertEqual(hits, [])
@@ -455,7 +455,7 @@ class OfficialBytesAndCrlfTests(unittest.TestCase):
         path = ROOT / "testdata" / "official" / "CII_example3.xml"
         engine = validate.SaxonEngine()
         try:
-            xslt = ROOT / validate.CII_XSLT_REL
+            xslt = ROOT / validate.VENDORED_XSLT[validate.DEFAULT_VERSION]["CII"][0]
             svrl = engine.transform(path, xslt)
         finally:
             engine.close()
@@ -708,7 +708,7 @@ class SameBytesToctouTests(unittest.TestCase):
                     [xml_path],
                     syntax="auto",
                     fail_on_raw="failed-assert",
-                    version="1.3.16",
+                    version=validate.DEFAULT_VERSION,
                     root=ROOT,
                     cwd=base,
                 )
@@ -752,7 +752,7 @@ class SameBytesToctouTests(unittest.TestCase):
                         [xml_path],
                         syntax="auto",
                         fail_on_raw="failed-assert",
-                        version="1.3.16",
+                        version=validate.DEFAULT_VERSION,
                         root=ROOT,
                     )
                 finally:
@@ -797,7 +797,7 @@ class SnapshotCleanupValidationTests(unittest.TestCase):
                     [path],
                     syntax="auto",
                     fail_on_raw="failed-assert",
-                    version="1.3.16",
+                    version=validate.DEFAULT_VERSION,
                     root=ROOT,
                     cwd=ROOT,
                 )
@@ -848,7 +848,7 @@ class SnapshotCleanupValidationTests(unittest.TestCase):
                 [path],
                 syntax="auto",
                 fail_on_raw="failed-assert",
-                version="1.3.16",
+                version=validate.DEFAULT_VERSION,
                 root=ROOT,
                 cwd=ROOT,
             )
