@@ -6,23 +6,31 @@ NOTICE
    See LICENSE and LICENSE-EUPL-1.2.txt.
 
 2. Vendored XSLT (unmodified copies)
+   © ConnectingEurope / European Commission, Licence: EUPL 1.2
+
+   vendor/en16931-1.3.17/xslt/EN16931-CII-validation.xslt
+   vendor/en16931-1.3.17/xslt/EN16931-UBL-validation.xslt
+   Release: eInvoicing-EN16931 validation-1.3.17 (12 October 2026 UTC)
+   Source: https://github.com/ConnectingEurope/eInvoicing-EN16931/releases/tag/validation-1.3.17
+   Licence text: vendor/en16931-1.3.17/LICENSE.txt
+   SHA256: vendor/en16931-1.3.17/XSLT.SHA256SUMS
+
    vendor/en16931-1.3.16/xslt/EN16931-CII-validation.xslt
    vendor/en16931-1.3.16/xslt/EN16931-UBL-validation.xslt
-   © ConnectingEurope / European Commission
    Release: eInvoicing-EN16931 validation-1.3.16 (13 April 2026 UTC)
-   Licence: EUPL 1.2
    Source: https://github.com/ConnectingEurope/eInvoicing-EN16931/releases/tag/validation-1.3.16
    Licence text: vendor/en16931-1.3.16/LICENSE.txt
    SHA256: vendor/en16931-1.3.16/XSLT.SHA256SUMS
 
 3. Official examples (unmodified copies)
    testdata/official/*.xml
-   Same release, same licence. SHA256: testdata/official/SHA256SUMS
+   Release validation-1.3.17, same licence. SHA256: testdata/official/SHA256SUMS
 
 4. Mutants (modified copies — EUPL article 5)
    testdata/mutants/*.xml
    Each file is a one-line semantic modification of an official example,
-   dated 16 August 2026, used only to prove the runner reports
+   dated 16 August 2026 (CII_example3.xml re-derived from the 1.3.17
+   example on 18 October 2026), used only to prove the runner reports
    svrl:failed-assert. See testdata/MUTANTS.md.
 
 This Action reports what the official XSLT emits. It does not certify

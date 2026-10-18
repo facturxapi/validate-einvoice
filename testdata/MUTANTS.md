@@ -1,10 +1,11 @@
-# Mutants — expected `svrl:failed-assert` ids (EN16931 1.3.16)
+# Mutants — expected `svrl:failed-assert` ids (EN16931 1.3.17)
 
 Ten modified copies of the official ConnectingEurope examples. Each file
 has **one semantic change**. The originals in `official/` are untouched.
 
 Engine of record: SaxonC-HE 13.0 (`saxonche==13.0.0`) with the vendored
-XSLT 1.3.16. Ids are the SVRL `id` attributes, in document order.
+XSLT 1.3.17. Ids are the SVRL `id` attributes, in document order. The
+same ids fire with 1.3.16; none of the mutated rules was renamed in 1.3.17.
 
 | File | Class | Expected ids |
 |---|---|---|
@@ -25,4 +26,6 @@ A runner that reports **zero** failed-assert on any of these files, or
 a different id list, has failed the mutant gate.
 
 These XML files are **modified** (16 August 2026) relative to the
-official examples. See `NOTICE` (EUPL article 5).
+official examples. `CII_example3.xml` was re-derived from the 1.3.17
+example on 18 October 2026 (same one-line change, `CalculatedAmount`
+225 → 226). See `NOTICE` (EUPL article 5).

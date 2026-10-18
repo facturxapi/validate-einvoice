@@ -20,8 +20,17 @@ if str(SRC) not in sys.path:
 
 import validate  # noqa: E402
 
-LINUX_OFFICIAL_REPORT = "eaa0dc88dc46f88edca7808556f27faf2843d7e454f272a944a8e289a04cd717"
-LINUX_MUTANT_REPORT = "5ee08caf8a868a5d1a2333cb3d912507bb312a619e5f7daae02eaa6d94f9d85b"
+# (official, mutants) canonical report SHA256 per vendored version.
+LINUX_REPORTS = {
+    "1.3.16": (
+        "d46955b924e88ce203ea39e5498669aa5d3204c22a87cae68f89236718382e0d",
+        "26b49d80dcf82e0b256a415564cc67bf68362ce2903c2e41d6cf9b79d85050b6",
+    ),
+    "1.3.17": (
+        "5ab42d1f115a524f9ce524f65b8755bfab9cdc750d30d1b35548264716b3b95e",
+        "35cb6995e323611b8e774be6b4e59e885bb8ea7b10a330a5d59b8c550c6ab803",
+    ),
+}
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -36,10 +45,11 @@ def testdata_xml() -> list[Path]:
     return sorted((ROOT / "testdata").rglob("*.xml"))
 
 
-def file_row(kind: str, name: str, file_sha: str, ids: list[str]) -> dict:
+def file_row(
+    kind: str, name: str, file_sha: str, ids: list[str], version: str = validate.DEFAULT_VERSION
+) -> dict:
     syntax = "UBL" if name.startswith("ubl-") else "CII"
-    xslt = validate.UBL_XSLT_REL if syntax == "UBL" else validate.CII_XSLT_REL
-    xslt_sha = validate.UBL_XSLT_SHA256 if syntax == "UBL" else validate.CII_XSLT_SHA256
+    xslt, xslt_sha = validate.VENDORED_XSLT[version][syntax]
     return {
         "failed_assert_count": len(ids),
         "failed_assert_ids": list(ids),
@@ -52,13 +62,15 @@ def file_row(kind: str, name: str, file_sha: str, ids: list[str]) -> dict:
     }
 
 
-def reconstruct_report(kind: str, expected: dict[str, list[str]], *, crlf: bool) -> tuple[str, str]:
+def reconstruct_report(
+    kind: str, expected: dict[str, list[str]], *, crlf: bool, version: str = validate.DEFAULT_VERSION
+) -> tuple[str, str]:
     names = sorted(path.name for path in (ROOT / "testdata" / "official").glob("*.xml"))
     rows = []
     for name in names:
         raw = (ROOT / "testdata" / kind / name).read_bytes()
         on_disk = lf_to_crlf(raw) if crlf else raw
-        rows.append(file_row(kind, name, sha256_bytes(on_disk), expected[name]))
+        rows.append(file_row(kind, name, sha256_bytes(on_disk), expected[name], version))
     rows.sort(key=lambda item: item["path"])
     payload = {
         "engine": validate.ENGINE_NAME,
@@ -68,7 +80,7 @@ def reconstruct_report(kind: str, expected: dict[str, list[str]], *, crlf: bool)
         "files": rows,
         "syntax": "auto",
         "verdict": "fail" if any(row["verdict"] == "fail" for row in rows) else "pass",
-        "version": validate.SUPPORTED_VERSION,
+        "version": version,
     }
     text = validate.canonical_json(payload)
     return text, validate.sha256_text(text)
@@ -198,16 +210,18 @@ class LinuxReconstructionTests(unittest.TestCase):
         names = sorted(path.name for path in (ROOT / "testdata" / "official").glob("*.xml"))
         self.assertEqual(len(names), 10)
         expected_off = {name: [] for name in names}
-        text_off, hash_off = reconstruct_report("official", expected_off, crlf=False)
-        text_mut, hash_mut = reconstruct_report("mutants", expected_mut, crlf=False)
-        self.assertNotIn("\r", text_off)
-        self.assertNotIn("\r", text_mut)
-        self.assertEqual(hash_off, LINUX_OFFICIAL_REPORT)
-        self.assertEqual(hash_mut, LINUX_MUTANT_REPORT)
-        _, hash_off_crlf = reconstruct_report("official", expected_off, crlf=True)
-        _, hash_mut_crlf = reconstruct_report("mutants", expected_mut, crlf=True)
-        self.assertNotEqual(hash_off, hash_off_crlf)
-        self.assertNotEqual(hash_mut, hash_mut_crlf)
+        self.assertEqual(set(LINUX_REPORTS), set(validate.VENDORED_XSLT))
+        for version, (want_off, want_mut) in LINUX_REPORTS.items():
+            text_off, hash_off = reconstruct_report("official", expected_off, crlf=False, version=version)
+            text_mut, hash_mut = reconstruct_report("mutants", expected_mut, crlf=False, version=version)
+            self.assertNotIn("\r", text_off)
+            self.assertNotIn("\r", text_mut)
+            self.assertEqual(hash_off, want_off, version)
+            self.assertEqual(hash_mut, want_mut, version)
+            _, hash_off_crlf = reconstruct_report("official", expected_off, crlf=True, version=version)
+            _, hash_mut_crlf = reconstruct_report("mutants", expected_mut, crlf=True, version=version)
+            self.assertNotEqual(hash_off, hash_off_crlf)
+            self.assertNotEqual(hash_mut, hash_mut_crlf)
 
 
 class SelftestGateScriptTests(unittest.TestCase):
@@ -224,7 +238,7 @@ class SelftestGateScriptTests(unittest.TestCase):
                 "files": [file_row("official", name, "a" * 64, []) for name in names],
                 "syntax": "auto",
                 "verdict": "pass",
-                "version": validate.SUPPORTED_VERSION,
+                "version": validate.DEFAULT_VERSION,
             }
         )
         expected = json.loads((ROOT / "testdata" / "expected-ids.json").read_text(encoding="utf-8"))
@@ -238,7 +252,7 @@ class SelftestGateScriptTests(unittest.TestCase):
                 "files": mutant_files,
                 "syntax": "auto",
                 "verdict": "fail",
-                "version": validate.SUPPORTED_VERSION,
+                "version": validate.DEFAULT_VERSION,
             }
         )
         digest_lines = []
@@ -276,7 +290,7 @@ class SelftestGateScriptTests(unittest.TestCase):
                 "files": [file_row("official", name, "a" * 64, []) for name in names],
                 "syntax": "auto",
                 "verdict": "pass",
-                "version": validate.SUPPORTED_VERSION,
+                "version": validate.DEFAULT_VERSION,
             }
         )
         expected = json.loads((ROOT / "testdata" / "expected-ids.json").read_text(encoding="utf-8"))
@@ -289,7 +303,7 @@ class SelftestGateScriptTests(unittest.TestCase):
                 "files": [file_row("mutants", name, "b" * 64, expected[name]) for name in sorted(expected)],
                 "syntax": "auto",
                 "verdict": "fail",
-                "version": validate.SUPPORTED_VERSION,
+                "version": validate.DEFAULT_VERSION,
             }
         )
         digest_lines = [f"{row['sha256']}  {row['path']}" for row in json.loads(official)["files"]]
