@@ -4,11 +4,11 @@
 
 GitHub Action that runs the official ConnectingEurope EN16931 XSLT
 artefacts (CII and UBL) on XML invoices and reports every
-`svrl:failed-assert`: 1.3.16 by default, 1.3.17 opt-in until it takes
-effect on 15/11/26.
+`svrl:failed-assert`: 1.3.17 by default (in force since 15/11/26),
+1.3.16 on request.
 
 A green job means: the vendored stylesheets of the selected version
-(1.3.16 by default, 1.3.17 with `version: '1.3.17'`) produced zero
+(1.3.17 by default, 1.3.16 with `version: '1.3.16'`) produced zero
 `svrl:failed-assert` on the files you passed. The Action does not call
 a remote API, does not read PDF attachments, and does not certify a
 document.
@@ -19,19 +19,19 @@ document.
 
 | Ref | What it is |
 |---|---|
-| `@v1` | **Mutable** major tag (Marketplace channel). It moves to each new `v1.x.y`; it points at `v1.2.0` (EN16931 1.3.16 by default, 1.3.17 opt-in). |
-| `@v1.2.0` | Release tag, never moved once published. Default rules 1.3.16; `version: '1.3.17'` selects 1.3.17. |
-| `@v1.1.2` | Previous release, 1.3.16 only (`a805a904f9fa1a7d51db5a4160e863748cc3733d`). |
+| `@v1` | **Mutable** major tag (Marketplace channel). It moves to each new `v1.x.y`; it points at `v1.3.0` (EN16931 1.3.17 by default). |
+| `@v1.3.0` | Release tag, never moved once published. Default rules 1.3.17; `version: '1.3.16'` still selects 1.3.16. |
+| `@v1.2.0` | Previous release: default rules 1.3.16, 1.3.17 opt-in. |
+| `@v1.1.2` | Older release, 1.3.16 only (`a805a904f9fa1a7d51db5a4160e863748cc3733d`). |
 | Full commit SHA of a release | The frozen tree. Each release's notes give it. |
 
-### EN16931 1.3.17: opt-in until 15/11/26
+### EN16931 1.3.17: the default since `v1.3.0`
 
 The Commission's [registry of EN16931 artefacts](https://ec.europa.eu/digital-building-blocks/sites/spaces/DIGITAL/pages/467108974/Registry+of+supporting+artefacts+to+implement+EN16931)
-lists 1.3.17 as published on 12/10/26 and in force from 15/11/26. Until
-then 1.3.16 stays the default and 1.3.17 is opt-in: set
-`version: '1.3.17'`. A later release, `v1.3.0` (planned for 16/11/26),
-makes 1.3.17 the default and `@v1` will move to it; `version: '1.3.16'`
-will still select 1.3.16.
+lists 1.3.17 as published on 12/10/26 and in force from 15/11/26.
+`v1.3.0` makes it the default, so a workflow on `@v1` runs the new rules
+and can see new or renamed rule ids. To keep 1.3.16, set
+`version: '1.3.16'` or pin `v1.2.0`.
 
 1.3.17 renames the IGIC and IPSI rules (upstream
 [#519](https://github.com/ConnectingEurope/eInvoicing-EN16931/issues/519)),
@@ -65,7 +65,7 @@ invoices with a DOCTYPE or external entities before Saxon runs.
 **Downstream consumer**, frozen on a release commit (SHA from the release notes):
 
 ```yaml
-- uses: facturxapi/validate-einvoice@172c8b824316f94459741e4cb9f1f348eb052a02 # v1.2.0
+- uses: facturxapi/validate-einvoice@<full-commit-sha> # v1.3.0
   with:
     files: invoices/**/*.xml
 ```
@@ -82,7 +82,7 @@ Copy-paste workflow: [`examples/validate-invoices.yml`](examples/validate-invoic
 
 ## Which FacturX repo should I use?
 
-- [validate-einvoice](https://github.com/facturxapi/validate-einvoice) — GitHub Action that runs the official ConnectingEurope EN16931 XSLT artefacts (CII/UBL): 1.3.16 by default, 1.3.17 opt-in.
+- [validate-einvoice](https://github.com/facturxapi/validate-einvoice) — GitHub Action that runs the official ConnectingEurope EN16931 1.3.17 XSLT artefacts (CII/UBL).
 - [en16931-oracles](https://github.com/facturxapi/en16931-oracles) — Replayable fixtures, receipts and mutants for EN16931 1.3.17, plus a BR-FR pack for the French Flux2 rules (tested on France_RFE `v1.4.0.02` / `v1.4.0.03`).
 - [awesome-einvoicing](https://github.com/facturxapi/awesome-einvoicing) — Sourced map of specs, validators, libraries and corpora. Inclusion is not a ranking.
 
@@ -111,16 +111,16 @@ When this repository is checked out as the workflow repo (or vendored):
 
 ```yaml
 # Frozen — full commit SHA of a release
-- uses: facturxapi/validate-einvoice@172c8b824316f94459741e4cb9f1f348eb052a02 # v1.2.0
+- uses: facturxapi/validate-einvoice@<full-commit-sha> # v1.3.0
   with:
     files: invoices/**/*.xml
     fail-on: failed-assert
 
-# Opt in to EN16931 1.3.17 (in force from 15/11/26)
+# Previous rules — EN16931 1.3.16 on the current release
 - uses: facturxapi/validate-einvoice@v1
   with:
     files: invoices/**/*.xml
-    version: '1.3.17'
+    version: '1.3.16'
 
 # Mutable — @v1 major tag (follows the latest v1.x.y)
 - uses: facturxapi/validate-einvoice@v1
@@ -148,7 +148,7 @@ When this repository is checked out as the workflow repo (or vendored):
 | `files` | yes | — | Glob(s) of XML invoices, relative to the workspace. Separate several globs with a newline or a comma. Zero matches fail the job (exit 2). |
 | `syntax` | no | `auto` | `auto` reads the document-element namespace. `cii` / `ubl` force one syntax and fail if the document does not match. |
 | `fail-on` | no | `failed-assert` | `failed-assert`: any `svrl:failed-assert` fails the job. `never`: report only. Comma-separated ids: fail only if one of those ids fires. An id renamed between 1.3.16 and 1.3.17 is translated with a warning; an id the selected XSLT does not contain under either name is a configuration error (exit 2). |
-| `version` | no | `1.3.16` | `1.3.16` or `1.3.17` (opt-in until it takes effect on 15/11/26), the two vendored releases. Any other value is a configuration error. |
+| `version` | no | `1.3.17` | `1.3.17` or `1.3.16`, the two vendored releases. Any other value is a configuration error. |
 
 ## Outputs
 
@@ -174,10 +174,10 @@ A different stylesheet is a different oracle; pins are not auto-updated.
 
 | Version | Syntax | Vendored file | SHA256 |
 |---|---|---|---|
-| 1.3.17 (opt-in) | CII | `vendor/en16931-1.3.17/xslt/EN16931-CII-validation.xslt` | `0757f07909938b1b297b8356ab7b66406c89f1b342325385d6a2def998c817f0` |
-| 1.3.17 (opt-in) | UBL | `vendor/en16931-1.3.17/xslt/EN16931-UBL-validation.xslt` | `fc4e6cfa8596bba0c2abd19038a98960c6ee9fc1f44566787c115efd4f4aca7c` |
-| 1.3.16 (default) | CII | `vendor/en16931-1.3.16/xslt/EN16931-CII-validation.xslt` | `0b234dea2bbfee739b7761e607a992c17fab88773014ef56355b6158cfb1cc53` |
-| 1.3.16 (default) | UBL | `vendor/en16931-1.3.16/xslt/EN16931-UBL-validation.xslt` | `39f9d282867f1a49e7708d9e29a53da89643e1ee56f10cec1ebcf1277595fcbd` |
+| 1.3.17 (default) | CII | `vendor/en16931-1.3.17/xslt/EN16931-CII-validation.xslt` | `0757f07909938b1b297b8356ab7b66406c89f1b342325385d6a2def998c817f0` |
+| 1.3.17 (default) | UBL | `vendor/en16931-1.3.17/xslt/EN16931-UBL-validation.xslt` | `fc4e6cfa8596bba0c2abd19038a98960c6ee9fc1f44566787c115efd4f4aca7c` |
+| 1.3.16 | CII | `vendor/en16931-1.3.16/xslt/EN16931-CII-validation.xslt` | `0b234dea2bbfee739b7761e607a992c17fab88773014ef56355b6158cfb1cc53` |
+| 1.3.16 | UBL | `vendor/en16931-1.3.16/xslt/EN16931-UBL-validation.xslt` | `39f9d282867f1a49e7708d9e29a53da89643e1ee56f10cec1ebcf1277595fcbd` |
 
 Source of those octets: ConnectingEurope `eInvoicing-EN16931` tags
 [`validation-1.3.17`](https://github.com/ConnectingEurope/eInvoicing-EN16931/releases/tag/validation-1.3.17)
@@ -224,7 +224,7 @@ unit tests, and run the identity gate. Any difference is a failure.
 - Not Factur-X / ZUGFeRD packaging, not PDF/A-3, not veraPDF.
 - Not a certification and not a product benchmark.
 - Not an official ConnectingEurope Action. It only runs the official
-  ConnectingEurope EN16931 XSLT artefacts (1.3.16, 1.3.17).
+  ConnectingEurope EN16931 XSLT artefacts (1.3.17, 1.3.16).
 
 ## Licence
 
