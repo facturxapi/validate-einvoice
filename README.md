@@ -2,7 +2,7 @@
 
 [![Self-test EN16931 action](https://github.com/facturxapi/validate-einvoice/actions/workflows/selftest.yml/badge.svg)](https://github.com/facturxapi/validate-einvoice/actions/workflows/selftest.yml) [![EN16931 upstream drift](https://github.com/facturxapi/validate-einvoice/actions/workflows/upstream-drift.yml/badge.svg)](https://github.com/facturxapi/validate-einvoice/actions/workflows/upstream-drift.yml) [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Validate%20EN16931-blue?logo=github)](https://github.com/marketplace/actions/validate-en16931-e-invoice)
 
-GitHub Action that runs the official ConnectingEurope EN16931 XSLT
+GitHub Action that runs the official ConnectingEurope EN 16931 XSLT
 artefacts (CII and UBL) on XML invoices and reports every
 `svrl:failed-assert`: 1.3.17 by default (in force since 15/11/26),
 1.3.16 on request.
@@ -19,15 +19,15 @@ document.
 
 | Ref | What it is |
 |---|---|
-| `@v1` | **Mutable** major tag (Marketplace channel). It moves to each new `v1.x.y`; it points at `v1.3.0` (EN16931 1.3.17 by default). |
+| `@v1` | **Mutable** major tag (Marketplace channel). It moves to each new `v1.x.y`; it points at `v1.3.0` (EN 16931 1.3.17 by default). |
 | `@v1.3.0` | Release tag, never moved once published. Default rules 1.3.17; `version: '1.3.16'` still selects 1.3.16. |
 | `@v1.2.0` | Previous release: default rules 1.3.16, 1.3.17 opt-in. |
 | `@v1.1.2` | Older release, 1.3.16 only (`a805a904f9fa1a7d51db5a4160e863748cc3733d`). |
 | Full commit SHA of a release | The frozen tree. Each release's notes give it. |
 
-### EN16931 1.3.17: the default since `v1.3.0`
+### EN 16931 1.3.17: the default since `v1.3.0`
 
-The Commission's [registry of EN16931 artefacts](https://ec.europa.eu/digital-building-blocks/sites/spaces/DIGITAL/pages/467108974/Registry+of+supporting+artefacts+to+implement+EN16931)
+The Commission's [registry of EN 16931 artefacts](https://ec.europa.eu/digital-building-blocks/sites/spaces/DIGITAL/pages/467108974/Registry+of+supporting+artefacts+to+implement+EN16931)
 lists 1.3.17 as published on 12/10/26 and in force from 15/11/26.
 `v1.3.0` makes it the default, so a workflow on `@v1` runs the new rules
 and can see new or renamed rule ids. To keep 1.3.16, set
@@ -82,8 +82,8 @@ Copy-paste workflow: [`examples/validate-invoices.yml`](examples/validate-invoic
 
 ## Which FacturX repo should I use?
 
-- [validate-einvoice](https://github.com/facturxapi/validate-einvoice) — GitHub Action that runs the official ConnectingEurope EN16931 1.3.17 XSLT artefacts (CII/UBL).
-- [en16931-oracles](https://github.com/facturxapi/en16931-oracles) — Replayable fixtures, receipts and mutants for EN16931 1.3.17, plus a BR-FR pack for the French Flux2 rules (tested on France_RFE `v1.4.0.02` / `v1.4.0.03`).
+- [validate-einvoice](https://github.com/facturxapi/validate-einvoice) — GitHub Action that runs the official ConnectingEurope EN 16931 1.3.17 XSLT artefacts (CII/UBL).
+- [en16931-oracles](https://github.com/facturxapi/en16931-oracles) — Replayable fixtures, receipts and mutants for EN 16931 1.3.17, plus a BR-FR pack for the French Flux2 rules (tested on France_RFE `v1.4.0.02` / `v1.4.0.03`).
 - [awesome-einvoicing](https://github.com/facturxapi/awesome-einvoicing) — Sourced map of specs, validators, libraries and corpora. Inclusion is not a ranking.
 
 ## Public self-test (24 Aug 2026)
@@ -116,7 +116,7 @@ When this repository is checked out as the workflow repo (or vendored):
     files: invoices/**/*.xml
     fail-on: failed-assert
 
-# Previous rules — EN16931 1.3.16 on the current release
+# Previous rules — EN 16931 1.3.16 on the current release
 - uses: facturxapi/validate-einvoice@v1
   with:
     files: invoices/**/*.xml
@@ -219,22 +219,22 @@ unit tests, and run the identity gate. Any difference is a failure.
 ## What this does not claim
 
 - Not a national CIUS (France, XRechnung profile, Peppol BIS, …).
-  `XRechnung-O.xml` is an official EN16931 category-O example, not a
+  `XRechnung-O.xml` is an official EN 16931 category-O example, not a
   CIUS proof.
 - Not Factur-X / ZUGFeRD packaging, not PDF/A-3, not veraPDF.
 - Not a certification and not a product benchmark.
 - Not an official ConnectingEurope Action. It only runs the official
-  ConnectingEurope EN16931 XSLT artefacts (1.3.17, 1.3.16).
+  ConnectingEurope EN 16931 XSLT artefacts (1.3.17, 1.3.16).
 
 ## Licence
 
 EUPL 1.2 for this Action. The vendored XSLT (`validation-1.3.17` and
 `validation-1.3.16`) and the official examples (`validation-1.3.17`) are
-ConnectingEurope EN16931 artefacts, also EUPL 1.2, unmodified. Mutants are modified copies (see `NOTICE`).
+ConnectingEurope EN 16931 artefacts, also EUPL 1.2, unmodified. Mutants are modified copies (see `NOTICE`).
 
 ## See also
 
-- [awesome-einvoicing](https://github.com/facturxapi/awesome-einvoicing) — sourced map of EN16931 / Factur-X / ZUGFeRD / XRechnung specs, validators, and corpora.
+- [awesome-einvoicing](https://github.com/facturxapi/awesome-einvoicing) — sourced map of EN 16931 / Factur-X / ZUGFeRD / XRechnung specs, validators, and corpora.
 - [en16931-oracles](https://github.com/facturxapi/en16931-oracles) — test invoices with signed expected verdicts, aligned with the Commission's ITB validator (16/16). Useful as CI fixtures for this Action.
 - For PDF/A-3 (Factur-X/ZUGFeRD) container checks, repair, and the French CTC profile: [facturxapi.com/docs](https://facturxapi.com/docs).
 - Walkthrough: adding the official 1.3.16 XSLT to GitHub Actions (YAML, BR-* codes, fixtures that must fail): https://facturxapi.com/blog/valider-ci-github-actions
