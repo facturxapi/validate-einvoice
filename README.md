@@ -65,7 +65,7 @@ invoices with a DOCTYPE or external entities before Saxon runs.
 **Downstream consumer**, frozen on a release commit (SHA from the release notes):
 
 ```yaml
-- uses: facturxapi/validate-einvoice@<full-commit-sha> # v1.3.0
+- uses: facturxapi/validate-einvoice@8a3d0a25a3047ce664b806b2211d8ddc85c19dfc # v1.3.0
   with:
     files: invoices/**/*.xml
 ```
@@ -111,7 +111,7 @@ When this repository is checked out as the workflow repo (or vendored):
 
 ```yaml
 # Frozen — full commit SHA of a release
-- uses: facturxapi/validate-einvoice@<full-commit-sha> # v1.3.0
+- uses: facturxapi/validate-einvoice@8a3d0a25a3047ce664b806b2211d8ddc85c19dfc # v1.3.0
   with:
     files: invoices/**/*.xml
     fail-on: failed-assert
