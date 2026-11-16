@@ -4,8 +4,8 @@
 
 | Release line | Supported | Hardening controls below |
 |---|---|---|
-| `v1` major tag (**mutable**, points at `v1.2.0`) | yes | **yes** |
-| `v1.1.1`, `v1.1.2`, `v1.2.0` | yes | **yes** |
+| `v1` major tag (**mutable**, points at `v1.3.0`) | yes | **yes** |
+| `v1.1.1`, `v1.1.2`, `v1.2.0`, `v1.3.0` | yes | **yes** |
 | `v1.0.0`, `v1.1.0` | no — move to `v1` or the latest `v1.x.y` | **no** |
 | `main` | development only | checked on every push |
 

@@ -116,9 +116,9 @@ class XsltPinTests(unittest.TestCase):
                 self.assertEqual(mapping[syntax]["logical"], logical)
 
     def test_default_is_the_release_in_force(self) -> None:
-        # 1.3.17 is effective from 15/11/26 (Commission registry): opt-in until then.
-        self.assertEqual(validate.DEFAULT_VERSION, "1.3.16")
-        self.assertIn("1.3.17", validate.VENDORED_XSLT)
+        # 1.3.17 is effective from 15/11/26 (Commission registry).
+        self.assertEqual(validate.DEFAULT_VERSION, "1.3.17")
+        self.assertIn("1.3.16", validate.VENDORED_XSLT)
 
     def test_upstream_pin_is_newest_vendored(self) -> None:
         pins = json.loads((ROOT / "vendor" / "upstream.json").read_text(encoding="utf-8"))

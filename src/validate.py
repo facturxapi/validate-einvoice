@@ -25,7 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Iterator
 
-DEFAULT_VERSION = "1.3.16"
+DEFAULT_VERSION = "1.3.17"
 ENGINE_NAME = "SaxonC-HE 13.0"
 ENGINE_PKG_PIN = "saxonche==13.0.0"
 ENGINE_PKG_PREFIX = "13.0"
@@ -41,8 +41,8 @@ UBL_CREDIT_NS = "urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2"
 
 # Vendored ConnectingEurope releases, unmodified: (path, SHA256) per syntax.
 # The default is the release in force (the Commission registry lists 1.3.17
-# as effective from 15/11/26); a newer one is selectable before that date and
-# older ones stay selectable so a pinned `version:` keeps its rules.
+# as effective from 15/11/26); older ones stay selectable so a pinned
+# `version:` keeps its rules.
 VENDORED_XSLT: dict[str, dict[str, tuple[str, str]]] = {
     "1.3.17": {
         "CII": (
